@@ -14,10 +14,14 @@ using Mesen.ViewModels;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.IO;
+using Avalonia;
+using DynamicData;
 
 namespace Mesen.Debugger.ViewModels
 {
@@ -132,6 +136,129 @@ namespace Mesen.Debugger.ViewModels
 		}
 	}
 
+	public class ProfilerRecord
+	{
+		private string AvgCycles;
+		private string CallCount;
+		private string ExclusiveCycles;
+		private string ExclusivePercent;
+		private string FunctionName;
+		private string InclusiveCycles;
+		private string InclusivePercent;
+		private string MaxCycles;
+		private string MinCycles;
+		private ProfilerRecord() { }
+
+		public class Builder
+		{
+			private ProfilerRecord record = new ProfilerRecord();
+
+			public Builder WithAvgCycles(string avgCycles)
+			{
+				record.AvgCycles = avgCycles;
+				return this;
+			}
+
+			public Builder WithCallCount(string callCount)
+			{
+				record.CallCount = callCount;
+				return this;
+			}
+
+			public Builder WithExclusiveCycles(string exclusiveCycles)
+			{
+				record.ExclusiveCycles = exclusiveCycles;
+				return this;
+			}
+
+			public Builder WithExclusivePercent(string exclusivePercent)
+			{
+				record.ExclusivePercent = exclusivePercent;
+				return this;
+			}
+
+			public Builder WithFunctionName(string functionName)
+			{
+				record.FunctionName = functionName;
+				return this;
+			}
+
+			public Builder WithInclusiveCycles(string inclusiveCycles)
+			{
+				record.InclusiveCycles = inclusiveCycles;
+				return this;
+			}
+
+			public Builder WithInclusivePercent(string inclusivePercent)
+			{
+				record.InclusivePercent = inclusivePercent;
+				return this;
+			}
+
+			public Builder WithMaxCycles(string maxCycles)
+			{
+				record.MaxCycles = maxCycles;
+				return this;
+			}
+
+			public Builder WithMinCycles(string minCycles)
+			{
+				record.MinCycles = minCycles;
+				return this;
+			}
+
+			public ProfilerRecord Build()
+			{
+				return record;
+			}
+		}
+
+		public string GetAvgCycles()
+		{
+			return AvgCycles;
+		}
+
+		public string GetCallCount()
+		{
+			return CallCount;
+		}
+
+		public string GetExclusiveCycles()
+		{
+			return ExclusiveCycles;
+		}
+
+		public string GetExclusivePercent()
+		{
+			return ExclusivePercent;
+		}
+
+		public string GetFunctionName()
+		{
+			return FunctionName;
+		}
+
+		public string GetInclusiveCycles()
+		{
+			return InclusiveCycles;
+		}
+
+		public string GetInclusivePercent()
+		{
+			return InclusivePercent;
+		}
+
+		public string GetMaxCycles()
+		{
+			return MaxCycles;
+		}
+
+		public string GetMinCycles()
+		{
+			return MinCycles;
+		}
+	}
+
 	public class ProfilerTab : ReactiveObject
 	{
 		[Reactive] public string TabName { get; set; } = "";
@@ -146,12 +273,16 @@ namespace Mesen.Debugger.ViewModels
 		private int _dataSize = 0;
 		private ProfiledFunction[] _coreProfilerData = new ProfiledFunction[100000];
 		private ProfiledFunction[] _profilerData = Array.Empty<ProfiledFunction>();
+		private Dictionary<UInt64, List<ProfilerRecord>> ProfilerRecords = new ();
+		private UInt64 frameCount = 0;
 
 		private UInt64 _totalCycles;
+		private string ProfilerFilename = Path.Combine(ConfigManager.DebuggerFolder, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".csv");
 
 		public ProfilerTab()
 		{
 			SortState.SetColumnSort("InclusiveTime", ListSortDirection.Descending, false);
+			frameCount = 0;
 		}
 
 		public ProfiledFunction? GetRawData(int index)
@@ -198,9 +329,93 @@ namespace Mesen.Debugger.ViewModels
 				GridData.Add(new ProfiledFunctionViewModel());
 			}
 
+			List<ProfilerRecord> d = new();
+
 			for(int i = 0; i < profilerData.Length; i++) {
 				GridData[i].Update(profilerData[i], CpuType, _totalCycles);
+				d.Add(
+					new ProfilerRecord.Builder()
+						.WithAvgCycles(GridData[i].AvgCycles)
+						.WithCallCount(GridData[i].CallCount)
+						.WithExclusiveCycles(GridData[i].ExclusiveCycles)
+						.WithExclusivePercent(GridData[i].ExclusivePercent)
+						.WithFunctionName(GridData[i].FunctionName)
+						.WithInclusiveCycles(GridData[i].InclusiveCycles)
+						.WithInclusivePercent(GridData[i].InclusivePercent)
+						.WithMaxCycles(GridData[i].MaxCycles)
+						.WithMinCycles(GridData[i].MinCycles)
+						.Build()
+				);
 			}
+
+			ProfilerRecords.Add(frameCount, d);
+
+			++frameCount;
+			
+			if (frameCount == 10) {
+				FileHelper.WriteAllText(ProfilerFilename, ConvertProfilerToCSV());
+			}
+			
+		}
+
+		public string ConvertProfilerToCSV()
+		{
+			List<string> Columns = GetColumns();
+			string CSVText = "Frame,";
+
+			if(!File.Exists(ProfilerFilename)) {
+				foreach(string Name in Columns) {
+					CSVText += Name;
+					CSVText += ",";
+				}
+			}
+
+			CSVText = CSVText.Substring(0, CSVText.Length - 1);
+			CSVText += "\n";
+
+
+			foreach(KeyValuePair<UInt64, List<ProfilerRecord>> entry in ProfilerRecords) {
+				UInt64 frame = entry.Key;
+				CSVText += frame.ToString();
+				CSVText += ",";
+
+				foreach(string Name in Columns) {
+					List<ProfilerRecord> records = entry.Value;
+					ProfilerRecord found = null;
+
+					foreach(ProfilerRecord record in records) {
+						if(record.GetFunctionName() == Name) {
+							found = record;
+							break;
+						}
+					}
+
+					if(found != null) {
+						CSVText += found.GetMaxCycles();
+					}
+
+					CSVText += ",";
+				}
+
+				CSVText = CSVText.Substring(0, CSVText.Length - 1);
+				CSVText += "\n";
+			}
+			
+
+			return CSVText;
+		}
+
+		public List<string> GetColumns()
+		{
+			SortedSet<string> Columns = new();
+
+			foreach(List<ProfilerRecord> Records in ProfilerRecords.Values) {
+				foreach(ProfilerRecord Record in Records) {
+					Columns.Add(Record.GetFunctionName());
+				}
+			}
+
+			return Columns.ToList();
 		}
 
 		public void SortCommand(object? param)
