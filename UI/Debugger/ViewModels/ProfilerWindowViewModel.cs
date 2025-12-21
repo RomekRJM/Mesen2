@@ -296,7 +296,6 @@ namespace Mesen.Debugger.ViewModels
 
 		public void ResetData()
 		{
-			DebugApi.ResetProfiler(CpuType);
 			GridData.Clear();
 			RefreshData();
 			RefreshGrid();
@@ -311,6 +310,7 @@ namespace Mesen.Debugger.ViewModels
 
 		public void RefreshGrid()
 		{
+			DebugApi.ResetProfiler(CpuType);
 			lock(_updateLock) {
 				Array.Resize(ref _profilerData, _dataSize);
 				Array.Copy(_coreProfilerData, _profilerData, _dataSize);
