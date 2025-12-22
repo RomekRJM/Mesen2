@@ -277,6 +277,7 @@ namespace Mesen.Debugger.ViewModels
 		private UInt64 frameCount = 0;
 
 		private UInt64 _totalCycles;
+		private UInt64 maxCycles = 0;
 		private string ProfilerFilename = Path.Combine(ConfigManager.DebuggerFolder, DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".csv");
 
 		public ProfilerTab()
@@ -348,7 +349,10 @@ namespace Mesen.Debugger.ViewModels
 				);
 			}
 
-			ProfilerRecords.Add(frameCount, d);
+			if(totalCycles > maxCycles) {
+				ProfilerRecords.Add(maxCycles, d);
+				maxCycles = totalCycles;
+			}
 
 			++frameCount;
 			
