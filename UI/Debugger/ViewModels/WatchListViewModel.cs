@@ -71,6 +71,10 @@ namespace Mesen.Debugger.ViewModels
 					WatchEntries[i].Value = newEntries[i].Value;
 					WatchEntries[i].NumericValue = newEntries[i].NumericValue;
 					WatchEntries[i].IsChanged = newEntries[i].IsChanged;
+					WatchEntries[i].Description = newEntries[i].Description;
+					WatchEntries[i].IsAuto = newEntries[i].IsAuto;
+					WatchEntries[i].AutoExpression = newEntries[i].AutoExpression;
+					WatchEntries[i].RelAddress = newEntries[i].RelAddress;
 				}
 			}
 		}
@@ -81,7 +85,18 @@ namespace Mesen.Debugger.ViewModels
 				return;
 			}
 
+			if(index < WatchEntries.Count && WatchEntries[index].IsAuto && WatchEntries[index].AutoExpression == expression) {
+				//Auto-generated entry was not modified, keep it as an auto entry
+				return;
+			}
+
+			//Editing an auto-generated entry adds it to the regular watch list (its index is past the end of the list)
 			Manager.UpdateWatch(index, expression);
+		}
+
+		private bool HasManualEntrySelected()
+		{
+			return Selection.SelectedItems.Any(item => item != null && !item.IsAuto && WatchEntries.IndexOf(item) < Manager.WatchEntries.Count);
 		}
 		
 		public void MoveUp(int index)
@@ -134,6 +149,10 @@ namespace Mesen.Debugger.ViewModels
 
 			WatchValueInfo entry = WatchEntries[Selection.SelectedIndex];
 
+			if(entry.IsAuto && entry.RelAddress >= 0) {
+				return new LocationInfo() { RelAddress = new() { Address = entry.RelAddress, Type = CpuType.ToMemoryType() } };
+			}
+
 			Match match = _watchAddressOrLabel.Match(entry.Expression);
 			if(match.Success) {
 				string address = match.Groups[3].Value;
@@ -170,7 +189,7 @@ namespace Mesen.Debugger.ViewModels
 				new ContextMenuAction() {
 					ActionType = ActionType.Delete,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.WatchList_Delete),
-					IsEnabled = () => Selection.SelectedItems.Count > 0,
+					IsEnabled = () => HasManualEntrySelected(),
 					OnClick = () => {
 						DeleteWatch(Selection.SelectedItems.ToList());
 					}
@@ -182,7 +201,7 @@ namespace Mesen.Debugger.ViewModels
 					ActionType = ActionType.MoveUp,
 					RoutingStrategy = RoutingStrategies.Tunnel,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.WatchList_MoveUp),
-					IsEnabled = () => Selection.SelectedItems.Count == 1 && Selection.SelectedIndex > 0,
+					IsEnabled = () => Selection.SelectedItems.Count == 1 && Selection.SelectedIndex > 0 && Selection.SelectedIndex < Manager.WatchEntries.Count,
 					OnClick = () => {
 						MoveUp(Selection.SelectedIndex);
 					}
@@ -192,7 +211,7 @@ namespace Mesen.Debugger.ViewModels
 					ActionType = ActionType.MoveDown,
 					RoutingStrategy = RoutingStrategies.Tunnel,
 					Shortcut = () => ConfigManager.Config.Debug.Shortcuts.Get(DebuggerShortcut.WatchList_MoveDown),
-					IsEnabled = () => Selection.SelectedItems.Count == 1 && Selection.SelectedIndex < WatchEntries.Count - 2,
+					IsEnabled = () => Selection.SelectedItems.Count == 1 && Selection.SelectedIndex < Manager.WatchEntries.Count - 1,
 					OnClick = () => {
 						MoveDown(Selection.SelectedIndex);
 					}
@@ -279,6 +298,17 @@ namespace Mesen.Debugger.ViewModels
 					IsSelected = () => ConfigManager.Config.Debug.Debugger.WatchFormat == WatchFormatStyle.Binary,
 					OnClick = () => {
 						ConfigManager.Config.Debug.Debugger.WatchFormat = WatchFormatStyle.Binary;
+						UpdateWatch();
+					}
+				},
+
+				new ContextMenuSeparator(),
+
+				new ContextMenuAction() {
+					ActionType = ActionType.WatchShowCFunctionVariables,
+					IsSelected = () => ConfigManager.Config.Debug.Debugger.WatchShowCFunctionVariables,
+					OnClick = () => {
+						ConfigManager.Config.Debug.Debugger.WatchShowCFunctionVariables = !ConfigManager.Config.Debug.Debugger.WatchShowCFunctionVariables;
 						UpdateWatch();
 					}
 				},

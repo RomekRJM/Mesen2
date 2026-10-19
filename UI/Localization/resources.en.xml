@@ -1321,6 +1321,7 @@
 		<Form ID="WatchListView">
 			<Control ID="colName">Name</Control>
 			<Control ID="colValue">Value</Control>
+			<Control ID="colDescription">Description</Control>
 		</Form>
 		
 		<Form ID="QuickSearchView">
@@ -3361,6 +3362,7 @@ E
 			<Value ID="WatchDecimalDisplay">Decimal Display</Value>
 			<Value ID="WatchHexDisplay">Hexadecimal Display</Value>
 			<Value ID="WatchBinaryDisplay">Binary Display</Value>
+			<Value ID="WatchShowCFunctionVariables">Show Current C Function Variables</Value>
 
 			<Value ID="RowDisplayFormat">Row Display Format</Value>
 			<Value ID="RowFormatBinary">Binary</Value>

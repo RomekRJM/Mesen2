@@ -1,5 +1,6 @@
 ﻿using Avalonia.Media;
 using Mesen.Config;
+using Mesen.Debugger.Integration;
 using Mesen.Debugger.Labels;
 using Mesen.Debugger.Utilities;
 using Mesen.Interop;
@@ -18,12 +19,17 @@ namespace Mesen.Debugger
 		public delegate void WatchChangedEventHandler(bool resetSelection);
 
 		public static Regex FormatSuffixRegex = new Regex(@"^(.*),\s*([B|H|S|U])([\d]){0,1}$", RegexOptions.Compiled);
-		private static Regex _arrayWatchRegex = new Regex(@"\[((\$[0-9A-Fa-f]+)|(\d+)|([@_a-zA-Z0-9]+))\s*,\s*(\d+)\]", RegexOptions.Compiled);
+		private static Regex _arrayWatchRegex = new Regex(@"\[\s*((\$[0-9A-Fa-f]+)|(\d+)|([@_a-zA-Z0-9]+))(\s*\+\s*((\$[0-9A-Fa-f]+)|(\d+)))?\s*,\s*(\d+)\s*\]", RegexOptions.Compiled);
+		private static Regex _memoryAccessRegex = new Regex(@"^(\[|\{)\s*((\$[0-9A-Fa-f]+)|(\d+)|([@_a-zA-Z0-9]+))(\s*\+\s*((\$[0-9A-Fa-f]+)|(\d+)))?\s*(,\s*(\d+))?\s*(\]|\})$", RegexOptions.Compiled);
 
 		public event WatchChangedEventHandler? WatchChanged;
-		
+
 		private List<string> _watchEntries = new List<string>();
 		private CpuType _cpuType;
+
+		//Variables of the C function the CPU is currently stopped in (auto-generated watch entries)
+		private CFunctionWatchInfo? _functionInfo;
+		private DbgImporter? _functionInfoProvider;
 
 		private static Dictionary<CpuType, WatchManager> _watchManagers = new Dictionary<CpuType, WatchManager>();
 
@@ -67,51 +73,156 @@ namespace Mesen.Debugger
 				defaultByteLength = 4;
 			}
 
+			UpdateFunctionInfo();
+
 			var list = new List<WatchValueInfo>();
+			HashSet<string> manualExpressions = new HashSet<string>();
 			for(int i = 0; i < _watchEntries.Count; i++) {
 				string expression = _watchEntries[i].Trim();
-				string newValue = "";
-				EvalResultType resultType;
+				manualExpressions.Add(NormalizeExpression(expression));
 
-				string exprToEvaluate = expression;
-				WatchFormatStyle style = defaultStyle;
-				int byteLength = defaultByteLength;
-				if(expression.StartsWith("{") && expression.EndsWith("}")) {
-					//Default to 2-byte values when using {} syntax
-					byteLength = 2;
-				}
+				WatchValueInfo entry = EvaluateEntry(expression, defaultStyle, defaultByteLength, out bool forceHasChanged);
+				entry.IsChanged = forceHasChanged || (i < previousValues.Count ? (previousValues[i].Value != entry.Value) : false);
+				entry.Description = DescribeExpression(expression) ?? "";
+				list.Add(entry);
+			}
 
-				ProcessFormatSpecifier(ref exprToEvaluate, ref style, ref byteLength);
-
-				Int64 numericValue = -1;
-
-				bool forceHasChanged = false;
-				Match match = _arrayWatchRegex.Match(expression);
-				if(match.Success) {
-					//Watch expression matches the array display syntax (e.g: [$300,10] = display 10 bytes starting from $300)
-					newValue = ProcessArrayDisplaySyntax(style, ref forceHasChanged, match);
-				} else {
-					Int64 result = DebugApi.EvaluateExpression(exprToEvaluate, _cpuType, out resultType, true);
-					switch(resultType) {
-						case EvalResultType.Numeric:
-							numericValue = result;
-							newValue = FormatValue(result, style, byteLength);
-							break;
-
-						case EvalResultType.Boolean: newValue = result == 0 ? "false" : "true";	break;
-						case EvalResultType.Invalid: newValue = "<invalid expression>"; forceHasChanged = true; break;
-						case EvalResultType.DivideBy0: newValue = "<division by zero>"; forceHasChanged = true; break;
-						case EvalResultType.OutOfScope: newValue = "<label out of scope>"; forceHasChanged = true; break;
+			if(_functionInfo != null) {
+				//Auto-generated entries for the current C function, displayed after the user's entries (not saved)
+				foreach(CWatchEntry autoEntry in _functionInfo.Entries) {
+					if(manualExpressions.Contains(NormalizeExpression(autoEntry.Expression))) {
+						continue;
 					}
-				}
 
-				bool isChanged = forceHasChanged || (i < previousValues.Count ? (previousValues[i].Value != newValue) : false);
-				list.Add(new WatchValueInfo() { Expression = expression, Value = newValue, IsChanged = isChanged, NumericValue = numericValue });
+					int i = list.Count;
+					WatchValueInfo entry = EvaluateEntry(autoEntry.Expression, defaultStyle, defaultByteLength, out bool forceHasChanged);
+					entry.IsChanged = forceHasChanged || (i < previousValues.Count && previousValues[i].Expression == entry.Expression && previousValues[i].Value != entry.Value);
+					entry.Description = autoEntry.Description;
+					entry.IsAuto = true;
+					entry.AutoExpression = entry.Expression;
+					entry.RelAddress = autoEntry.RelAddress;
+					list.Add(entry);
+				}
 			}
 
 			list.Add(new WatchValueInfo());
 
 			return list;
+		}
+
+		private WatchValueInfo EvaluateEntry(string expression, WatchFormatStyle defaultStyle, int defaultByteLength, out bool forceHasChanged)
+		{
+			string newValue = "";
+			EvalResultType resultType;
+
+			string exprToEvaluate = expression;
+			WatchFormatStyle style = defaultStyle;
+			int byteLength = defaultByteLength;
+			if(expression.StartsWith("{") && expression.EndsWith("}")) {
+				//Default to 2-byte values when using {} syntax
+				byteLength = 2;
+			}
+
+			ProcessFormatSpecifier(ref exprToEvaluate, ref style, ref byteLength);
+
+			Int64 numericValue = -1;
+
+			forceHasChanged = false;
+			Match match = _arrayWatchRegex.Match(expression);
+			if(match.Success) {
+				//Watch expression matches the array display syntax (e.g: [$300,10] = display 10 bytes starting from $300)
+				newValue = ProcessArrayDisplaySyntax(style, ref forceHasChanged, match);
+			} else {
+				Int64 result = DebugApi.EvaluateExpression(exprToEvaluate, _cpuType, out resultType, true);
+				switch(resultType) {
+					case EvalResultType.Numeric:
+						numericValue = result;
+						newValue = FormatValue(result, style, byteLength);
+						break;
+
+					case EvalResultType.Boolean: newValue = result == 0 ? "false" : "true";	break;
+					case EvalResultType.Invalid: newValue = "<invalid expression>"; forceHasChanged = true; break;
+					case EvalResultType.DivideBy0: newValue = "<division by zero>"; forceHasChanged = true; break;
+					case EvalResultType.OutOfScope: newValue = "<label out of scope>"; forceHasChanged = true; break;
+				}
+			}
+
+			return new WatchValueInfo() { Expression = expression, Value = newValue, NumericValue = numericValue };
+		}
+
+		private static string NormalizeExpression(string expression)
+		{
+			return Regex.Replace(expression, @"\s+", "").ToLowerInvariant();
+		}
+
+		private void UpdateFunctionInfo()
+		{
+			if(!ConfigManager.Config.Debug.Debugger.WatchShowCFunctionVariables || DebugWorkspaceManager.SymbolProvider is not DbgImporter importer || importer.CpuType != _cpuType) {
+				_functionInfo = null;
+				_functionInfoProvider = null;
+				return;
+			}
+
+			if(_functionInfoProvider != importer) {
+				_functionInfo = null;
+				_functionInfoProvider = importer;
+			}
+
+			//Only look up the current function while execution is paused, to avoid the list changing constantly while the game runs
+			if(EmuApi.IsPaused()) {
+				UInt32 pc = DebugApi.GetProgramCounter(_cpuType, true);
+				AddressInfo absAddress = DebugApi.GetAbsoluteAddress(new AddressInfo() { Address = (int)pc, Type = _cpuType.ToMemoryType() });
+				_functionInfo = importer.GetCFunctionWatchInfo(absAddress);
+			}
+		}
+
+		private string? DescribeExpression(string expression)
+		{
+			if(_functionInfo == null) {
+				return null;
+			}
+
+			Match formatMatch = FormatSuffixRegex.Match(expression);
+			if(formatMatch.Success) {
+				expression = formatMatch.Groups[1].Value;
+			}
+
+			Match match = _memoryAccessRegex.Match(expression.Trim());
+			if(!match.Success) {
+				return null;
+			}
+
+			Int64 address;
+			if(match.Groups[3].Success) {
+				address = Int64.Parse(match.Groups[3].Value.Substring(1), System.Globalization.NumberStyles.HexNumber);
+			} else if(match.Groups[4].Success) {
+				address = Int64.Parse(match.Groups[4].Value);
+			} else {
+				CodeLabel? label = LabelManager.GetLabel(match.Groups[5].Value);
+				if(label == null) {
+					return null;
+				}
+				address = label.GetRelativeAddress(_cpuType).Address;
+			}
+
+			if(address < 0) {
+				return null;
+			}
+
+			address += ParseOffset(match.Groups[8], match.Groups[9]);
+
+			int length = match.Groups[11].Success ? int.Parse(match.Groups[11].Value) : (match.Groups[1].Value == "{" ? 2 : 1);
+			return _functionInfo.Describe((int)address, length);
+		}
+
+		private static Int64 ParseOffset(Group hexGroup, Group decGroup)
+		{
+			if(hexGroup.Success) {
+				return Int64.Parse(hexGroup.Value.Substring(1), System.Globalization.NumberStyles.HexNumber);
+			} else if(decGroup.Success) {
+				return Int64.Parse(decGroup.Value);
+			}
+			return 0;
 		}
 
 		private string FormatValue(Int64 value, WatchFormatStyle style, int byteLength)
@@ -195,7 +306,12 @@ namespace Mesen.Debugger
 				return "<invalid expression>";
 			}
 
-			int elemCount = int.Parse(match.Groups[5].Value);
+			if(address >= 0) {
+				//Optional offset, e.g: [label+3, 10]
+				address += ParseOffset(match.Groups[7], match.Groups[8]);
+			}
+
+			int elemCount = int.Parse(match.Groups[9].Value);
 
 			if(address >= 0) {
 				List<string> values = new List<string>(elemCount);
@@ -312,7 +428,13 @@ namespace Mesen.Debugger
 		[Reactive] public string Value { get; set; } = "";
 		[Reactive] public string Expression { get; set; } = "";
 		[Reactive] public bool IsChanged { get; set; } = false;
+		[Reactive] public string Description { get; set; } = "";
+
+		//Auto-generated entry (variable of the current C function), not saved in the watch list
+		[Reactive] public bool IsAuto { get; set; } = false;
+		public string AutoExpression { get; set; } = "";
 		public Int64 NumericValue { get; set; } = -1;
+		public int RelAddress { get; set; } = -1;
 	}
 
 	public enum WatchFormatStyle

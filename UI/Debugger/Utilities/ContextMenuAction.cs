@@ -364,6 +364,7 @@ namespace Mesen.Debugger.Utilities
 		WatchDecimalDisplay,
 		WatchHexDisplay,
 		WatchBinaryDisplay,
+		WatchShowCFunctionVariables,
 		
 		RowDisplayFormat,
 		RowFormatBinary,

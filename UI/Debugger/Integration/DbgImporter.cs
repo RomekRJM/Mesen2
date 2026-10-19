@@ -21,6 +21,7 @@ namespace Mesen.Debugger.Integration
 		private static Regex _fileRegex = new Regex("^file\tid=([0-9]+),.*name=\"([^\"]+)\"", RegexOptions.Compiled);
 		private static Regex _scopeRegex = new Regex("^scope\tid=([0-9]+),.*name=\"([0-9a-zA-Z@_-]+)\"(,.*sym=([0-9+]+)){0,1}(,.*span=([0-9+]+)){0,1}", RegexOptions.Compiled);
 		private static Regex _cSymbolRegex = new Regex("^csym\tid=([0-9]+),.*name=\"([0-9a-zA-Z@_-]+)\"(,.*sym=([0-9+]+)){0,1}", RegexOptions.Compiled);
+		private static Regex _fileModRegex = new Regex(",mod=([0-9+]+)", RegexOptions.Compiled);
 
 		private static Regex _asmFirstLineRegex = new Regex(";(.*)", RegexOptions.Compiled);
 		private static Regex _asmPreviousLinesRegex = new Regex("^\\s*;(.*)", RegexOptions.Compiled);
@@ -52,6 +53,15 @@ namespace Mesen.Debugger.Integration
 		protected HashSet<int> _scopeSpans = new HashSet<int>();
 
 		private Dictionary<int, ScopeInfo> _scopesBySymbol = new Dictionary<int, ScopeInfo>();
+
+		//Used by the C watch analysis (includes module scopes with empty names, which _scopes skips)
+		private Dictionary<int, CScopeInfo> _cScopes = new Dictionary<int, CScopeInfo>();
+		private List<(int Start, int End, CScopeInfo Scope)>? _cFunctionRanges = null;
+		private Dictionary<int, List<CSymbolInfo>>? _cSymbolsByScope = null;
+		private Dictionary<string, SymbolInfo>? _labelSymbolsByName = null;
+		private string? _stackPointerLabel = null;
+		private bool _stackPointerResolved = false;
+		private CSourceAnalyzer? _cSourceAnalyzer = null;
 
 		public DateTime SymbolFileStamp { get; private set; }
 		public string SymbolPath { get; private set; } = "";
@@ -346,6 +356,10 @@ namespace Mesen.Debugger.Integration
 				int id = Int32.Parse(match.Groups[1].Value);
 
 				FileInfo file = new FileInfo(id, filename, isAsm);
+				Match modMatch = _fileModRegex.Match(row);
+				if(modMatch.Success) {
+					file.ModuleIds = modMatch.Groups[1].Value.Split('+').Select(o => Int32.Parse(o)).ToArray();
+				}
 				_sourceFiles.Add(file.SourceFile);
 
 				_files.Add(file.ID, file);
@@ -435,6 +449,15 @@ namespace Mesen.Debugger.Integration
 				int? symbolID = match.Groups[4].Success ? (int?)Int32.Parse(match.Groups[4].Value) : null;
 
 				CSymbolInfo symbol = new CSymbolInfo(id, name, symbolID);
+				DbgReader.ReadEntry(row, (ref ReadOnlySpan<char> tag, ref ReadOnlySpan<char> data) => {
+					if(tag.IsEqual("scope")) {
+						symbol.ScopeID = Int32.Parse(data);
+					} else if(tag.IsEqual("sc")) {
+						symbol.StorageClass = data.ToString();
+					} else if(tag.IsEqual("offs")) {
+						symbol.Offset = Int32.Parse(data);
+					}
+				});
 				_cSymbols.Add(symbol.ID, symbol);
 				return true;
 			} else {
@@ -469,6 +492,35 @@ namespace Mesen.Debugger.Integration
 			}
 
 			return false;
+		}
+
+		private void LoadCScope(string row)
+		{
+			CScopeInfo scope = new CScopeInfo();
+			bool hasId = false;
+			DbgReader.ReadEntry(row, (ref ReadOnlySpan<char> name, ref ReadOnlySpan<char> data) => {
+				if(name.IsEqual("id")) {
+					scope.ID = Int32.Parse(data);
+					hasId = true;
+				} else if(name.IsEqual("name")) {
+					scope.Name = data.Length >= 2 ? data.Slice(1, data.Length - 2).ToString() : "";
+				} else if(name.IsEqual("mod")) {
+					scope.ModuleID = Int32.Parse(data);
+				} else if(name.IsEqual("type")) {
+					scope.Type = data.ToString();
+				} else if(name.IsEqual("size")) {
+					scope.Size = Int32.Parse(data);
+				} else if(name.IsEqual("parent")) {
+					scope.ParentID = Int32.Parse(data);
+				} else if(name.IsEqual("span")) {
+					int[] spans = DbgReader.ReadIntArray(data);
+					scope.SpanID = spans.Length > 0 ? spans[^1] : null;
+				}
+			});
+
+			if(hasId) {
+				_cScopes[scope.ID] = scope;
+			}
 		}
 
 		private bool LoadSymbols(string row)
@@ -808,19 +860,8 @@ namespace Mesen.Debugger.Integration
 			foreach(FileInfo file in _files.Values) {
 				if(_usedFileIds.Contains(file.ID)) {
 					try {
-						string? basePath = path;
-						string sourceFile = Path.Combine(basePath, file.Name);
-						while(!File.Exists(sourceFile)) {
-							//Go back up folder structure to attempt to find the file
-							string oldPath = basePath;
-							basePath = Path.GetDirectoryName(basePath);
-							if(basePath == null || basePath == oldPath) {
-								break;
-							}
-							sourceFile = Path.Combine(basePath, file.Name);
-						}
-
-						if(File.Exists(sourceFile)) {
+						string? sourceFile = ResolveSourcePath(path, file.Name);
+						if(sourceFile != null) {
 							file.SetSourceFile(sourceFile);
 						}
 					} catch {
@@ -828,6 +869,220 @@ namespace Mesen.Debugger.Integration
 					}
 				}
 			}
+		}
+
+		private static string? ResolveSourcePath(string path, string fileName)
+		{
+			string? basePath = path;
+			string sourceFile = Path.Combine(basePath, fileName);
+			while(!File.Exists(sourceFile)) {
+				//Go back up folder structure to attempt to find the file
+				string oldPath = basePath;
+				basePath = Path.GetDirectoryName(basePath);
+				if(basePath == null || basePath == oldPath) {
+					break;
+				}
+				sourceFile = Path.Combine(basePath, fileName);
+			}
+
+			return File.Exists(sourceFile) ? sourceFile : null;
+		}
+
+		public CpuType CpuType => _cpuType;
+
+		/// <summary>
+		/// Returns the variables used by the C function that contains the given PRG ROM address (null if the address is not inside a C function)
+		/// </summary>
+		public CFunctionWatchInfo? GetCFunctionWatchInfo(AddressInfo absAddress)
+		{
+			try {
+				CScopeInfo? scope = GetCFunctionScope(absAddress);
+				if(scope == null) {
+					return null;
+				}
+
+				string? sourcePath = GetCFunctionSourcePath(scope, absAddress);
+				if(sourcePath == null) {
+					return null;
+				}
+
+				_cSourceAnalyzer ??= new CSourceAnalyzer();
+				CFunctionScopeInfo function = new CFunctionScopeInfo(scope.ID, scope.Name.Substring(1), sourcePath);
+				return _cSourceAnalyzer.GetFunctionInfo(function, name => ResolveCVariable(scope.ID, name));
+			} catch {
+				return null;
+			}
+		}
+
+		private CScopeInfo? GetCFunctionScope(AddressInfo absAddress)
+		{
+			if(absAddress.Type != _prgMemType || absAddress.Address < 0) {
+				return null;
+			}
+
+			if(_cFunctionRanges == null) {
+				_cFunctionRanges = new();
+				HashSet<(int, string)> functionSymbols = new();
+				foreach(CSymbolInfo csym in _cSymbols.Values) {
+					if(csym.ScopeID != null) {
+						functionSymbols.Add((csym.ScopeID.Value, "_" + csym.Name));
+					}
+				}
+
+				foreach(CScopeInfo scope in _cScopes.Values) {
+					//C functions are scopes named "_<name>" that contain a csym with the function's name
+					if(scope.Type != "scope" || scope.SpanID == null || !functionSymbols.Contains((scope.ID, scope.Name))) {
+						continue;
+					}
+
+					if(_spans.TryGetValue(scope.SpanID.Value, out SpanInfo span) && _segments.TryGetValue(span.SegmentID, out SegmentInfo segment) && !segment.IsRam) {
+						int start = segment.FileOffset - _headerSize + span.Offset;
+						_cFunctionRanges.Add((start, start + span.Size, scope));
+					}
+				}
+			}
+
+			CScopeInfo? result = null;
+			int resultSize = int.MaxValue;
+			foreach((int start, int end, CScopeInfo scope) in _cFunctionRanges) {
+				if(absAddress.Address >= start && absAddress.Address < end && end - start < resultSize) {
+					result = scope;
+					resultSize = end - start;
+				}
+			}
+			return result;
+		}
+
+		private string? GetCFunctionSourcePath(CScopeInfo scope, AddressInfo absAddress)
+		{
+			FileInfo? cFile = null;
+			if(_linesByPrgAddress.TryGetValue(absAddress.Address, out SourceCodeLocation loc) && loc.InternalLine is LineInfo line && line.Type == LineType.External) {
+				if(_files.TryGetValue(line.FileID, out FileInfo? lineFile) && lineFile.Name.EndsWith(".c", StringComparison.OrdinalIgnoreCase)) {
+					cFile = lineFile;
+				}
+			}
+
+			cFile ??= _files.Values.FirstOrDefault(f => f.ModuleIds.Contains(scope.ModuleID) && f.Name.EndsWith(".c", StringComparison.OrdinalIgnoreCase));
+			if(cFile == null) {
+				return null;
+			}
+
+			return ResolveSourcePath(SymbolPath, cFile.Name);
+		}
+
+		private CVariableLocation? ResolveCVariable(int scopeId, string name)
+		{
+			if(_cSymbolsByScope == null) {
+				_cSymbolsByScope = new();
+				foreach(CSymbolInfo csym in _cSymbols.Values) {
+					if(csym.ScopeID != null) {
+						if(!_cSymbolsByScope.TryGetValue(csym.ScopeID.Value, out List<CSymbolInfo>? list)) {
+							list = new();
+							_cSymbolsByScope[csym.ScopeID.Value] = list;
+						}
+						list.Add(csym);
+					}
+				}
+			}
+
+			//Look for the symbol in the function's scope, then its parents (module scope)
+			int? currentScope = scopeId;
+			HashSet<int> visited = new();
+			while(currentScope != null && visited.Add(currentScope.Value)) {
+				if(_cSymbolsByScope.TryGetValue(currentScope.Value, out List<CSymbolInfo>? csyms)) {
+					foreach(CSymbolInfo csym in csyms) {
+						if(csym.Name != name) {
+							continue;
+						}
+
+						if(csym.StorageClass == "auto") {
+							string? stackPointer = GetStackPointerLabel();
+							if(stackPointer == null) {
+								return null;
+							}
+							return new CVariableLocation(name, null, -1, 1, stackPointer, csym.Offset);
+						} else if(csym.SymbolID != null && _symbols.TryGetValue(csym.SymbolID.Value, out SymbolInfo symbol)) {
+							if(_cScopes.TryGetValue(currentScope.Value, out CScopeInfo? s) && s.Name == "_" + name) {
+								//This is the function itself
+								return null;
+							}
+							return GetVariableLocation(name, symbol);
+						}
+					}
+				}
+				currentScope = _cScopes.TryGetValue(currentScope.Value, out CScopeInfo? scope) ? scope.ParentID : null;
+			}
+
+			//Not referenced by this module, look for a global label with the same name (e.g unused aliases)
+			if(GetLabelSymbol("_" + name) is SymbolInfo labelSymbol) {
+				return GetVariableLocation(name, labelSymbol);
+			}
+			return null;
+		}
+
+		private SymbolInfo? GetLabelSymbol(string name)
+		{
+			if(_labelSymbolsByName == null) {
+				_labelSymbolsByName = new();
+				foreach(SymbolInfo symbol in _symbols.Values) {
+					if(symbol.Type == "lab") {
+						_labelSymbolsByName.TryAdd(symbol.Name, symbol);
+					}
+				}
+			}
+			return _labelSymbolsByName.TryGetValue(name, out SymbolInfo symbol2) ? symbol2 : null;
+		}
+
+		private CVariableLocation? GetVariableLocation(string name, SymbolInfo symbol)
+		{
+			if(symbol.Address == null && symbol.ExportSymbolID != null && _symbols.TryGetValue(symbol.ExportSymbolID.Value, out SymbolInfo exported)) {
+				symbol = exported;
+			}
+
+			if(_scopesBySymbol.ContainsKey(symbol.ID)) {
+				//Function/code scope, not a variable
+				return null;
+			}
+
+			AddressInfo? absAddress = GetSymbolAddressInfo(symbol);
+			if(absAddress == null) {
+				return null;
+			}
+
+			if(absAddress.Value.Type == _prgMemType) {
+				SpanInfo? defSpan = GetSymbolDefinitionSpan(symbol);
+				if(defSpan != null && !defSpan.Value.IsData) {
+					//Code label (e.g function), not a variable
+					return null;
+				}
+			}
+
+			AddressInfo relAddress = DebugApi.GetRelativeAddress(absAddress.Value, _cpuType);
+			CodeLabel? label = LabelManager.GetLabel(absAddress.Value);
+			string? labelName = label != null && label.Address == absAddress.Value.Address && label.Label.Length > 0 ? label.Label : null;
+			if(labelName == null && relAddress.Address < 0) {
+				return null;
+			}
+
+			return new CVariableLocation(name, labelName, relAddress.Address, GetSymbolSize(symbol), null, 0);
+		}
+
+		private string? GetStackPointerLabel()
+		{
+			if(!_stackPointerResolved) {
+				_stackPointerResolved = true;
+				//cc65's C stack pointer is named "c_sp" in recent versions, "sp" in older ones
+				foreach(string name in new string[] { "c_sp", "sp" }) {
+					if(GetLabelSymbol(name) is SymbolInfo symbol) {
+						CVariableLocation? loc = GetVariableLocation(name, symbol);
+						if(loc != null) {
+							_stackPointerLabel = loc.Label ?? ("$" + loc.RelAddress.ToString("X2"));
+							return _stackPointerLabel;
+						}
+					}
+				}
+			}
+			return _stackPointerLabel;
 		}
 
 		private void BuildCdlData()
@@ -944,7 +1199,7 @@ namespace Mesen.Debugger.Integration
 						case "spa": LoadSpans(row); break;
 						case "sym": LoadSymbols(row); break;
 						case "csy": LoadCSymbols(row); break;
-						case "sco": LoadScopes(row); break;
+						case "sco": LoadScopes(row); LoadCScope(row); break;
 						case "fil": LoadFiles(row, basePath); break;
 						case "seg": LoadSegments(row); break;
 					}
@@ -1057,6 +1312,7 @@ namespace Mesen.Debugger.Integration
 			public bool IsAssembly { get; }
 			public bool IsFileMissing { get; private set; }
 			public SourceFileInfo SourceFile { get; }
+			public int[] ModuleIds { get; set; } = Array.Empty<int>();
 
 			private string[]? _data = null;
 			private string? _sourceFile = null;
@@ -1187,6 +1443,9 @@ namespace Mesen.Debugger.Integration
 			public int ID { get; }
 			public string Name { get; }
 			public int? SymbolID { get; }
+			public int? ScopeID { get; set; }
+			public string? StorageClass { get; set; } //"ext", "static", "auto", "reg"
+			public int Offset { get; set; }
 
 			public CSymbolInfo(int id, string name, int? symbolID)
 			{
@@ -1194,6 +1453,17 @@ namespace Mesen.Debugger.Integration
 				Name = name;
 				SymbolID = symbolID;
 			}
+		}
+
+		private class CScopeInfo
+		{
+			public int ID { get; set; }
+			public string Name { get; set; } = "";
+			public int ModuleID { get; set; } = -1;
+			public string? Type { get; set; }
+			public int Size { get; set; }
+			public int? ParentID { get; set; }
+			public int? SpanID { get; set; }
 		}
 	}
 }
