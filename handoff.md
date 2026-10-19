@@ -95,11 +95,22 @@ Variable resolution (`ResolveCVariable`): look in the function's `csym` scope, t
 - Struct layout assumes cc65 rules: no padding, `int`/pointers = 2 bytes, `long` = 4, `enum` = 2. Bitfields are approximated by their base type.
 - Only `DbgImporter` (cc65 `.dbg`) is supported. Other symbol providers just get an empty Description.
 
+## Fork state / upstream sync (2026-10-19)
+
+- Remotes: `origin` = https://github.com/RomekRJM/Mesen2 (the fork), `upstream` = https://github.com/SourMesen/Mesen2 (official).
+- `master` was merged with `upstream/master` (182 upstream commits, no conflicts) in merge commit `d2d7874d`. Upstream did not touch any file of the Watch feature. `resources.en.xml` auto-merged; its second `colDescription` belongs to the Cheats form, so it is not a duplicate.
+- Backup of the pre-merge state: branch `backup/pre-upstream-merge` (= `08b62407`). It can be deleted once the merged build is confirmed working.
+- Nothing has been pushed yet: `git push origin master`.
+- Future syncs: `git fetch upstream && git merge upstream/master`. The fork's own changes are UI-only (C#), with nothing in Core. Expect conflicts only in `WatchManager.cs`, `DbgImporter.cs`, `WatchListViewModel.cs`, `WatchListView.axaml`, `resources.en.xml`, and the profiler files from earlier fork work.
+
 ## Build / test
 
-- Build: `dotnet build UI/UI.csproj -c Debug -p:Platform=x64 -p:SolutionDir=D:\workspace\Mesen2` (or Visual Studio, Debug/x64). Without `SolutionDir`, the output goes to `<cwd>\..\bin`. The native core is unchanged; `MesenCore.dll` is loaded from the Mesen home folder (`OneDrive\Dokumenty\Mesen2`).
+- **Full build (needed after any upstream sync, because upstream changes the native interop structs):**
+  `"C:\Program Files\Microsoft Visual Studio\2022\Community\MSBuild\Current\Bin\MSBuild.exe" Mesen.sln /m /restore /p:Configuration=Release /p:Platform=x64`
+  The output goes to `bin\win-x64\Release\Mesen.exe`. `MesenCore.dll` is packed into `Dependencies.zip`, and Mesen extracts it over the copy in the Mesen home folder (`OneDrive\Dokumenty\Mesen2`) at startup. Verified: the build succeeds after the merge, and the zip contains `MesenCore.dll`.
+- **UI-only rebuild** (C# changes, core unchanged): `dotnet build UI/UI.csproj -c Release -p:Platform=x64 -p:SolutionDir=D:\workspace\Mesen2`. Without `SolutionDir`, the output goes to `<cwd>\..\bin`. Use the same configuration as the last full build, or the core in `Dependencies.zip` will be missing or stale. `bin\win-x64\Debug` currently has the new UI but **no** matching core, so use Release.
 - The analyzer was tested on its own with a scratch console app that compiles `CSourceAnalyzer.cs` and uses a fake resolver built from `gopnik.dbg` labels. For `check_for_combo_p1`, `check_combo_index_p1` and `load_combo_soa`, the output matched the expected table (aliases tmp1..tmp6, `p1Combo` fields, `oppositeStatus.hp/status`, and `tmpArr1` correctly omitted because its use is inside `#if SHOW_PLAYER_COMBO` = 0).
-- **Not yet verified in the running emulator GUI.** Manual test: load `GopnikTournament/gopnik.nes` (the `.dbg` auto-loads), put a breakpoint in `check_for_combo_p1` (Source View, `combo/combo.c`), trigger it and check the Watch tab. Values should match the Memory Viewer (`_tmp1` = $41, `_p1Combo` = $65B0).
+- **Not yet verified in the running emulator GUI** (neither before nor after the upstream merge). Manual test with `bin\win-x64\Release\Mesen.exe`: load `GopnikTournament/gopnik.nes` (the `.dbg` auto-loads), put a breakpoint in `check_for_combo_p1` (Source View, `combo/combo.c`), trigger it and check the Watch tab. Values should match the Memory Viewer (`_tmp1` = $41, `_p1Combo` = $65B0).
 
 ## Ideas for next steps
 
