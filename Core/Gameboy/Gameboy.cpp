@@ -171,6 +171,7 @@ void Gameboy::SaveBattery()
 	if(_hasBattery) {
 		_emu->GetBatteryManager()->SaveBattery(".srm", _cartRam, _cartRamSize);
 	}
+	_cart->SaveBattery();
 }
 
 GbState Gameboy::GetState()
@@ -557,6 +558,11 @@ void Gameboy::ProcessEndOfFrame()
 {
 	_controlManager->UpdateControlDevices();
 	_controlManager->UpdateInputState();
+}
+
+void Gameboy::RunApu()
+{
+	_apu->Run();
 }
 
 BaseControlManager* Gameboy::GetControlManager()

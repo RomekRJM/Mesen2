@@ -3,6 +3,7 @@
 #include "GBA/GbaMemoryManager.h"
 #include "GBA/GbaPpu.h"
 #include "GBA/GbaCpu.h"
+#include "GBA/APU/GbaApu.h"
 #include "GBA/Input/GbaController.h"
 #include "GBA/Debugger/DummyGbaCpu.h"
 #include "GBA/Debugger/GbaDebugger.h"
@@ -67,6 +68,11 @@ GbaDebugger::GbaDebugger(Debugger* debugger) : IDebugger(debugger->GetEmulator()
 GbaDebugger::~GbaDebugger()
 {
 	_codeDataLogger->SaveCdlFile(_cdlFile);
+}
+
+void GbaDebugger::OnBeforeBreak(CpuType cpuType)
+{
+	_console->GetApu()->Run();
 }
 
 void GbaDebugger::Reset()
@@ -364,9 +370,14 @@ void GbaDebugger::ResetPrevOpCode()
 	_prevOpCode = 0;
 }
 
-uint8_t GbaDebugger::GetCpuFlags()
+uint8_t GbaDebugger::GetCpuFlags(uint32_t addr)
 {
-	return _cpu->GetState().CPSR.Thumb ? GbaCdlFlags::Thumb : 0;
+	switch(_settings->GetDebugConfig().GbaDisMode) {
+		case GbaDisassemblyMode::Default: return ((addr & 0x02) || _cpu->GetState().CPSR.Thumb) ? GbaCdlFlags::Thumb : 0;
+		case GbaDisassemblyMode::Arm: return (addr & 0x02) ? GbaCdlFlags::Thumb : 0;
+		case GbaDisassemblyMode::Thumb: return GbaCdlFlags::Thumb;
+	}
+	return 0;
 }
 
 BaseEventManager* GbaDebugger::GetEventManager()

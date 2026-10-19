@@ -10,6 +10,7 @@
 #include "Shared/Interfaces/IInputProvider.h"
 #include "Shared/Interfaces/IInputRecorder.h"
 #include "SNES/Input/SnesController.h"
+#include "SNES/Input/SnesRumbleController.h"
 #include "SNES/Input/SnesMouse.h"
 #include "SNES/Input/Multitap.h"
 #include "SNES/Input/SuperScope.h"
@@ -62,6 +63,10 @@ shared_ptr<BaseControlDevice> SnesControlManager::CreateControllerDevice(Control
 			device.reset(new Multitap(_console, port, controllers));
 			break;
 		}
+
+		case ControllerType::SnesRumbleController:
+			device.reset(new SnesRumbleController(_emu, _console, port, port == 0 ? cfg.Port1.Keys : cfg.Port2.Keys));
+			break;
 	}
 
 	return device;
@@ -88,6 +93,9 @@ void SnesControlManager::UpdateControlDevices()
 uint8_t SnesControlManager::Read(uint16_t addr, bool forAutoRead)
 {
 	if(!forAutoRead) {
+		if(_console->GetInternalRegisters()->IsAutoReadActive()) {
+			_emu->BreakIfDebugging(CpuType::Snes, BreakSource::SnesReadDuringAutoJoy);
+		}
 		_console->GetInternalRegisters()->ProcessAutoJoypad();
 		SetInputReadFlag();
 	}
@@ -95,6 +103,11 @@ uint8_t SnesControlManager::Read(uint16_t addr, bool forAutoRead)
 	uint8_t value = _console->GetMemoryManager()->GetOpenBus() & (addr == 0x4016 ? 0xFC : 0xE0);
 	for(shared_ptr<BaseControlDevice> &device : _controlDevices) {
 		value |= device->ReadRam(addr);
+	}
+
+	if(addr == 0x4017) {
+		//These bits are always set to 1 for 4017
+		value |= 0x1C;
 	}
 
 	return value;

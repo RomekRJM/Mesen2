@@ -376,14 +376,17 @@ uint8_t Rainbow::MapperReadVram(uint16_t addr, MemoryOperationType memoryOperati
 
 		NtControl& ctrl = _inWindow ? _windowControl : _ntControl[(addr >> 10) & 0x03];
 
+		uint8_t shift = 0;
 		if(_inWindow) {
 			uint8_t scanline = _ntFetchCounter >= 41 ? _scanlineCounter + 1 : _scanlineCounter;
 			uint8_t windowScanline = (scanline + _windowScrollY) % 240;
 			uint8_t column = (_ntFetchCounter + 1) % 42;
+			uint16_t ntAddr = ((windowScanline / 8 * 32) + ((column + _windowScrollX) & 0x1F));
 			if(!isAttributeFetch) {
-				addr = ((windowScanline / 8 * 32) + ((column + _windowScrollX) & 0x1F));
+				addr = ntAddr;
 			} else {
-				addr = 0x3C0 + ((windowScanline >> 3) | (((column + _windowScrollX) & 0x1F) >> 2));
+				addr = 0x3C0 + (((windowScanline >> 2) & 0xF8) | (((column + _windowScrollX) & 0x1F) >> 2));
+				shift = ((ntAddr >> 4) & 0x04) | (ntAddr & 0x02);
 			}
 		}
 
@@ -400,16 +403,20 @@ uint8_t Rainbow::MapperReadVram(uint16_t addr, MemoryOperationType memoryOperati
 		} else {
 			if(ctrl.AttrExtMode) {
 				uint8_t attr = (_extData & 0xC0) >> 6;
-				return attr | (attr << 2) | (attr << 4) | (attr << 6);
+				return attr * 0x55;
 			} else if(ctrl.FillMode) {
-				uint8_t attr = _fillModeAttrIndex;
-				return attr | (attr << 2) | (attr << 4) | (attr << 6);
+				return _fillModeAttrIndex * 0x55;
 			}
 		}
 
 		if(_inWindow) {
-			//If in window (and fill mode is not enabled), return the window nametable/attribute data
-			return _mapperRam[_windowBank * 0x400 + addr];
+			//If in window (and fill/ext mode are not enabled), return the window nametable/attribute data
+			if(isAttributeFetch) {
+				uint8_t palette = (_mapperRam[_windowBank * 0x400 + addr] >> shift) & 0x03;
+				return palette * 0x55; //copy the bottom 2 bits to the other 6 bits
+			} else {
+				return _mapperRam[_windowBank * 0x400 + addr];
+			}
 		}
 	} else {
 		//Tile data fetches
@@ -422,7 +429,7 @@ uint8_t Rainbow::MapperReadVram(uint16_t addr, MemoryOperationType memoryOperati
 				return ReadChr(fetchAddr);
 			} else {
 				uint32_t fetchAddr = (addr & 0x1FF8) | (windowScanline & 0x07);
-				return ReadChr(fetchAddr);
+				return InternalReadVram(fetchAddr);
 			}
 		} else if(_overrideTileFetch && isBgFetch) {
 			uint32_t fetchAddr = (addr & 0xFFF) | ((_extData & 0x3F) << 12) | (_bgExtModeOffset << 18);
@@ -597,14 +604,14 @@ uint8_t Rainbow::ReadRegister(uint16_t addr)
 			UpdateIrqStatus();
 
 			if(_nmiVectorEnabled) {
-				return (addr & 0x01) ? _nmiVectorAddr : (_nmiVectorAddr >> 8);
+				return (addr & 0x01) ? (_nmiVectorAddr >> 8) : _nmiVectorAddr;
 			}
 			return DebugReadRam(addr);
 
 		case 0xFFFE:
 		case 0xFFFF:
 			if(_irqVectorEnabled) {
-				return (addr & 0x01) ? _irqVectorAddr : (_irqVectorAddr >> 8);
+				return (addr & 0x01) ? (_irqVectorAddr >> 8) : _irqVectorAddr;
 			}
 			return DebugReadRam(addr);
 	}
@@ -655,7 +662,7 @@ void Rainbow::WriteRegister(uint16_t addr, uint8_t value)
 		case 0x4121: _bgExtModeOffset = value & 0x1F; break;
 
 		case 0x4124: _fillModeTileIndex = value; break;
-		case 0x4125: _fillModeAttrIndex = value; break;
+		case 0x4125: _fillModeAttrIndex = value & 0x03; break;
 		case 0x412E: _windowBank = value; break;
 
 		case 0x412F:
@@ -826,7 +833,7 @@ vector<MapperStateEntry> Rainbow::GetMapperStateEntries()
 
 	entries.push_back(MapperStateEntry("", "Fill Mode"));
 	entries.push_back(MapperStateEntry("$4124", "Tile Index", _fillModeTileIndex, MapperStateValueType::Number8));
-	entries.push_back(MapperStateEntry("$4125", "Attribute Index", _fillModeAttrIndex, MapperStateValueType::Number8));
+	entries.push_back(MapperStateEntry("$4125.0-1", "Attribute Index", _fillModeAttrIndex, MapperStateValueType::Number8));
 
 	auto processNtControl = [&](uint16_t addr, NtControl& ctrl) {
 		entries.push_back(MapperStateEntry("$" + HexUtilities::ToHex(addr) + ".0", "Attribute Ext. Mode", ctrl.AttrExtMode));

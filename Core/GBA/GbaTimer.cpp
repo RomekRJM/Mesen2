@@ -72,11 +72,18 @@ void GbaTimer::ProcessPendingTimers()
 		if(timer.EnableDelay) {
 			timer.EnableDelay--;
 			if(timer.EnableDelay == 1) {
-				timer.Timer = timer.ReloadValue;
 				if(timer.Mode) {
 					timer.EnableDelay = 0;
 					timer.ProcessTimer = false;
+				} else {
+					//When the timer gets enabled, the timer is clocked for a single cycle before its timer is reset
+					//to the reload value. If the timer was disabled with its internal timer at 0xFFFF, this can be
+					//enough to cause the timer roll over to 0, and trigger an IRQ (if enabled), etc.
+					if(timer.Timer == 0xFFFF && (_memoryManager->GetMasterClock() & _state.Timer[i].PrescaleMask) == 0) {
+						ClockTimer(i);
+					}
 				}
+				timer.Timer = timer.ReloadValue;
 			} else if(timer.EnableDelay == 0) {
 				timer.ProcessTimer = true;
 			}
@@ -140,16 +147,22 @@ void GbaTimer::Serialize(Serializer& s)
 {
 	for(int i = 0; i < 4; i++) {
 		SVI(_state.Timer[i].ReloadValue);
-		SVI(_state.Timer[i].NewReloadValue);
 		SVI(_state.Timer[i].Control);
-		SVI(_state.Timer[i].PrescaleMask);
 		SVI(_state.Timer[i].Timer);
-		SVI(_state.Timer[i].EnableDelay);
-		SVI(_state.Timer[i].WritePending);
-		SVI(_state.Timer[i].Mode);
-		SVI(_state.Timer[i].IrqEnabled);
-		SVI(_state.Timer[i].Enabled);
-		SVI(_state.Timer[i].ProcessTimer);
+
+		if(s.GetFormat() != SerializeFormat::Map) {
+			SVI(_state.Timer[i].PrescaleMask);
+			SVI(_state.Timer[i].Mode);
+			SVI(_state.Timer[i].IrqEnabled);
+			SVI(_state.Timer[i].Enabled);
+			SVI(_state.Timer[i].ProcessTimer);
+			SVI(_state.Timer[i].NewReloadValue);
+			SVI(_state.Timer[i].WritePending);
+			SVI(_state.Timer[i].EnableDelay);
+		}
 	}
-	SV(_hasPendingTimers);
+
+	if(s.GetFormat() != SerializeFormat::Map) {
+		SV(_hasPendingTimers);
+	}
 }

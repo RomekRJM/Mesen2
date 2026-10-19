@@ -452,8 +452,7 @@ void GbaPpuTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 	sprite.MosaicEnabled = oam[addr + 1] & 0x10 ? NullableBoolean::True : NullableBoolean::False;
 
 	GbaPpuObjMode mode = (GbaPpuObjMode)((oam[addr + 1] >> 2) & 0x03);
-	sprite.BlendingEnabled = mode == GbaPpuObjMode::Blending ? NullableBoolean::True : NullableBoolean::False;
-	sprite.WindowMode = mode == GbaPpuObjMode::Window ? NullableBoolean::True : NullableBoolean::False;
+	sprite.Mode = (DebugSpriteMode)mode;
 
 	uint8_t size = (oam[addr + 3] >> 6) & 0x03;
 
@@ -464,9 +463,9 @@ void GbaPpuTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 
 	static constexpr uint8_t sprSize[4][4][2] = {
 		{ { 8, 8 }, { 16, 8 }, { 8, 16 }, { 8, 8 } },
-		{ { 16, 16 }, { 32, 8 }, { 8, 32 }, { 16, 16 } },
-		{ { 32, 32 }, { 32, 16 }, { 16, 32 }, { 32, 32 } },
-		{ { 64, 64 }, { 64, 32 }, { 32, 64 }, { 64, 64 } }
+		{ { 16, 16 }, { 32, 8 }, { 8, 32 }, { 8, 8 } },
+		{ { 32, 32 }, { 32, 16 }, { 16, 32 }, { 8, 8 } },
+		{ { 64, 64 }, { 64, 32 }, { 32, 64 }, { 8, 8 } }
 	};
 
 	uint8_t width = sprSize[size][shape][0];
@@ -477,7 +476,7 @@ void GbaPpuTools::GetSpriteInfo(DebugSpriteInfo& sprite, uint32_t* spritePreview
 	sprite.SpriteIndex = i;
 	sprite.UseExtendedVram = false;
 	
-	if(spriteHidden || mode == GbaPpuObjMode::Invalid) {
+	if(spriteHidden) {
 		sprite.Visibility = SpriteVisibility::Disabled;
 	} else {
 		uint16_t x1 = sprite.X;

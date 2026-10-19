@@ -40,6 +40,8 @@ ifeq ($(UNAME_S),Darwin)
 	LINKCHECKUNRESOLVED :=
 endif
 
+MESENFLAGS += -m64
+
 MACHINE := $(shell uname -m)
 ifeq ($(MACHINE),x86_64)
 	MESENPLATFORM := $(MESENOS)-x64
@@ -51,8 +53,13 @@ endif
 ifneq ($(filter arm%,$(MACHINE)),)
 	MESENPLATFORM := $(MESENOS)-arm64
 endif
-
-MESENFLAGS += -m64
+ifeq ($(MACHINE),aarch64)
+	MESENPLATFORM := $(MESENOS)-arm64
+	ifeq ($(USE_GCC),true)
+		#don't set -m64 on arm64 for gcc (unrecognized option)
+		MESENFLAGS=
+	endif
+endif
 
 DEBUG ?= 0
 
@@ -196,7 +203,8 @@ ui: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)
 	rm -fr $(OUTFOLDER)/Dependencies/*
 	cp InteropDLL/$(OBJFOLDER)/$(SHAREDLIB) $(OUTFOLDER)/$(SHAREDLIB)
 	#Called twice because the first call copies native libraries to the bin folder which need to be included in Dependencies.zip
-	cd UI && dotnet publish -c $(BUILD_TYPE) $(OPTIMIZEUI) $(PUBLISHFLAGS)
+	#Don't run with AOT flags the first time to reduce build duration
+	cd UI && dotnet publish -c $(BUILD_TYPE) $(OPTIMIZEUI) -r $(MESENPLATFORM)
 	cd UI && dotnet publish -c $(BUILD_TYPE) $(OPTIMIZEUI) $(PUBLISHFLAGS)
 
 core: InteropDLL/$(OBJFOLDER)/$(SHAREDLIB)

@@ -9,6 +9,7 @@
 #include "Debugger/CodeDataLogger.h"
 #include "Debugger/DebugBreakHelper.h"
 #include "Debugger/DebugUtilities.h"
+#include "Debugger/IDebugger.h"
 #include "SNES/SnesCpuTypes.h"
 #include "SNES/SpcTypes.h"
 #include "SNES/Coprocessors/GSU/GsuTypes.h"
@@ -162,7 +163,12 @@ vector<DisassemblyResult> Disassembler::Disassemble(CpuType cpuType, uint16_t ba
 		}
 	};
 
-	uint8_t cpuFlags = _debugger->GetCpuFlags(cpuType);
+	uint8_t cpuFlags[4] = {};
+	for(int i = 0; i < 4; i++) {
+		//Used by GBA to realign ARM code to 4 bytes when disassembly
+		//unidentified sections. (all 4 values are identical for other CPUs)
+		cpuFlags[i] = _debugger->GetMainDebugger()->GetCpuFlags(i);
+	}
 
 	auto pushUnmappedBlock = [&]() {
 		int32_t prevAddress = results.size() > 0 ? results[results.size() - 1].CpuAddress + 1 : bankStart;
@@ -197,7 +203,7 @@ vector<DisassemblyResult> Disassembler::Disassemble(CpuType cpuType, uint16_t ba
 		if(disassemblyInfo.IsInitialized()) {
 			opSize = disassemblyInfo.GetOpSize();
 		} else if((isData && disData) || (!isData && !isCode && disUnident)) {
-			disassemblyInfo.Initialize(i, cpuFlags, cpuType, relAddress.Type, _memoryDumper);
+			disassemblyInfo.Initialize(i, cpuFlags[addrInfo.Address & 0x03], cpuType, relAddress.Type, _memoryDumper);
 			opSize = disassemblyInfo.GetOpSize();
 		}
 
@@ -571,7 +577,7 @@ void Disassembler::GetLineData(DisassemblyResult& row, CpuType type, MemoryType 
 
 					CodeDataLogger* cdl = cdlManager->GetCodeDataLogger(row.Address.Type);
 					if(!disInfo.IsInitialized()) {
-						disInfo = DisassemblyInfo(row.Address.Address, state.CPSR.ToInt32(), CpuType::Gba, row.Address.Type, _memoryDumper);
+						disInfo = DisassemblyInfo(row.Address.Address, _debugger->GetMainDebugger()->GetCpuFlags(row.Address.Address), CpuType::Gba, row.Address.Type, _memoryDumper);
 					} else {
 						data.Flags |= (!cdl || cdl->IsCode(data.AbsoluteAddress.Address)) ? LineFlags::VerifiedCode : LineFlags::UnexecutedCode;
 					}

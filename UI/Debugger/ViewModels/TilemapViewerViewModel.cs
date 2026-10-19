@@ -65,9 +65,9 @@ namespace Mesen.Debugger.ViewModels
 		private bool _refreshPending;
 
 		[Obsolete("For designer only")]
-		public TilemapViewerViewModel() : this(CpuType.Snes, new PictureViewer(), null) { }
+		public TilemapViewerViewModel() : this(CpuType.Snes, new(), new(), null) { }
 
-		public TilemapViewerViewModel(CpuType cpuType, PictureViewer picViewer, Window? wnd)
+		public TilemapViewerViewModel(CpuType cpuType, PictureViewer picViewer, ScrollPictureViewer scrollViewer, Window? wnd)
 		{
 			Config = ConfigManager.Config.Debug.TilemapViewer.Clone();
 			CpuType = cpuType;
@@ -134,7 +134,7 @@ namespace Mesen.Debugger.ViewModels
 				return;
 			}
 
-			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, new List<object>() {
+			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, scrollViewer, new List<object>() {
 				new ContextMenuAction() {
 					ActionType = ActionType.ViewInMemoryViewer,
 					HintText = () => {
@@ -415,7 +415,9 @@ namespace Mesen.Debugger.ViewModels
 
 		private void Config_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
 		{
-			RefreshTab();
+			if(!_inGameLoaded) {
+				RefreshTab();
+			}
 		}
 
 		[MemberNotNull(nameof(ViewerBitmap))]
@@ -487,7 +489,7 @@ namespace Mesen.Debugger.ViewModels
 				_coreData.CopyTo(_data);
 			}
 
-			if(_data.PpuState == null || _data.PpuToolsState == null) {
+			if(_data.PpuState == null || _data.PpuToolsState == null || _data.RgbPalette.Length == 0) {
 				_refreshPending = false;
 				return;
 			}

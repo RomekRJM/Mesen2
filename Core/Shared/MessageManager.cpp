@@ -22,6 +22,7 @@ std::unordered_map<string, string> MessageManager::_enResources = {
 	{ "VideoRecorder", u8"Video Recorder" },
 
 	{ "ApplyingPatch", u8"Applying patch: %1" },
+	{ "PatchFailed", u8"Failed to apply patch: %1" },
 	{ "CheatApplied", u8"1 cheat applied." },
 	{ "CheatsApplied", u8"%1 cheats applied." },
 	{ "CheatsDisabled", u8"All cheats disabled." },
@@ -84,6 +85,7 @@ std::list<string> MessageManager::_log;
 SimpleLock MessageManager::_logLock;
 SimpleLock MessageManager::_messageLock;
 bool MessageManager::_osdEnabled = true;
+bool MessageManager::_outputToStdout = false;
 IMessageManager* MessageManager::_messageManager = nullptr;
 
 void MessageManager::RegisterMessageManager(IMessageManager* messageManager)
@@ -102,9 +104,10 @@ void MessageManager::UnregisterMessageManager(IMessageManager* messageManager)
 	}
 }
 
-void MessageManager::SetOsdState(bool enabled)
+void MessageManager::SetOptions(bool osdEnabled, bool outputToStdout)
 {
-	_osdEnabled = enabled;
+	_osdEnabled = osdEnabled;
+	_outputToStdout = outputToStdout;
 }
 
 string MessageManager::Localize(string key)
@@ -175,6 +178,10 @@ void MessageManager::Log(string message)
 		_log.pop_front();
 	}
 	_log.push_back(message);
+
+	if(_outputToStdout) {
+		std::cout << message << std::endl;
+	}
 }
 
 void MessageManager::ClearLog()

@@ -86,6 +86,7 @@ private:
 	const shared_ptr<GameClient> _gameClient;
 	const shared_ptr<RewindManager> _rewindManager;
 
+	thread_local static thread::id _currentThreadId;
 	thread::id _emulationThreadId;
 
 	atomic<uint32_t> _lockCounter;
@@ -180,6 +181,7 @@ public:
 	void Unlock();
 	bool IsThreadPaused();
 
+	bool IsDebuggerBlocked() { return _blockDebuggerRequestCount > 0; }
 	void SuspendDebugger(bool release);
 
 	void Serialize(ostream& out, bool includeSettings, int compressionLevel = 1);

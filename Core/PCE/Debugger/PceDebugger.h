@@ -65,6 +65,7 @@ public:
 	PceDebugger(Debugger* debugger);
 	~PceDebugger();
 
+	void OnBeforeBreak(CpuType cpuType) override;
 	void Reset() override;
 
 	uint64_t GetCpuCycleCount(bool forProfiler) override;
@@ -73,6 +74,8 @@ public:
 	void ProcessInstruction();
 	void ProcessRead(uint32_t addr, uint8_t value, MemoryOperationType type);
 	void ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationType type);
+	void ProcessIdleCycle();
+
 	void ProcessInterrupt(uint32_t originalPc, uint32_t currentPc, bool forNmi) override;
 	void ProcessPpuRead(uint16_t addr, uint16_t value, MemoryType memoryType);
 	void ProcessPpuWrite(uint16_t addr, uint16_t value, MemoryType memoryType);

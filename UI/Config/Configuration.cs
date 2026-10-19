@@ -2,6 +2,7 @@
 using Avalonia.Controls;
 using Avalonia.Media;
 using Mesen.Config.Shortcuts;
+using Mesen.Interop;
 using Mesen.Utilities;
 using ReactiveUI;
 using ReactiveUI.Fody.Helpers;
@@ -19,7 +20,7 @@ namespace Mesen.Config
 	{
 		private string _fileData = "";
 
-		public string Version { get; set; } = "2.0.0";
+		public string Version { get; set; } = "2.1.1";
 		public int ConfigUpgrade { get; set; } = 0;
 
 		[Reactive] public VideoConfig Video { get; set; } = new();
@@ -128,6 +129,7 @@ namespace Mesen.Config
 			}
 
 			ConfigUpgrade = (int)ConfigUpgradeHint.NextValue - 1;
+			Version = EmuApi.GetMesenVersion().ToString(3);
 		}
 
 		public void InitializeDefaults()

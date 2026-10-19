@@ -46,6 +46,8 @@ public:
 
 	virtual void ResetPrevOpCode() {}
 
+	virtual void OnBeforeBreak(CpuType cpuType) {}
+
 	virtual void Step(int32_t stepCount, StepType type) = 0;
 	virtual void Reset() = 0;
 	virtual void Run() = 0;
@@ -63,7 +65,7 @@ public:
 	virtual uint32_t GetProgramCounter(bool getInstPc) = 0;
 	virtual void SetProgramCounter(uint32_t addr, bool updateDebuggerOnly = false) = 0;
 
-	virtual uint8_t GetCpuFlags() { return 0; }
+	virtual uint8_t GetCpuFlags(uint32_t addr) { return 0; }
 
 	virtual BreakpointManager* GetBreakpointManager() = 0;
 	virtual CallstackManager* GetCallstackManager() = 0;

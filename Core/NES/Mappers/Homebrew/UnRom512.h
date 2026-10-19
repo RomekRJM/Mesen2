@@ -22,7 +22,7 @@ protected:
 	uint16_t RegisterStartAddress() override { return 0x8000; }
 	uint16_t RegisterEndAddress() override { return 0xFFFF; }
 	uint32_t GetChrRamSize() override { return 0x8000; }
-	bool HasBusConflicts() override { return !HasBattery(); }
+	bool HasBusConflicts() override { return (_romInfo.SubMapperID == 0 && !HasBattery()) || _romInfo.SubMapperID == 2; }
 	bool AllowRegisterRead() override { return HasBattery(); }
 
 	void InitMapper() override
@@ -32,15 +32,20 @@ protected:
 		SelectPrgPage(1, -1);
 
 		_enableMirroringBit = false;
-		if(GetMirroringType() == MirroringType::ScreenAOnly || GetMirroringType() == MirroringType::ScreenBOnly) {
-			SetMirroringType(MirroringType::ScreenAOnly);
+		if(_romInfo.SubMapperID == 3) {
 			_enableMirroringBit = true;
+			SetMirroringType(MirroringType::Vertical);
 		} else {
-			switch(_romInfo.Header.Byte6 & 0x09) {
-				case 0: SetMirroringType(MirroringType::Horizontal); break;
-				case 1: SetMirroringType(MirroringType::Vertical); break;
-				case 8: SetMirroringType(MirroringType::ScreenAOnly); _enableMirroringBit = true; break;
-				case 9: SetMirroringType(MirroringType::FourScreens); break;
+			if(GetMirroringType() == MirroringType::ScreenAOnly || GetMirroringType() == MirroringType::ScreenBOnly) {
+				SetMirroringType(MirroringType::ScreenAOnly);
+				_enableMirroringBit = true;
+			} else {
+				switch(_romInfo.Header.Byte6 & 0x09) {
+					case 0: SetMirroringType(MirroringType::Horizontal); break;
+					case 1: SetMirroringType(MirroringType::Vertical); break;
+					case 8: SetMirroringType(MirroringType::ScreenAOnly); _enableMirroringBit = true; break;
+					case 9: SetMirroringType(MirroringType::FourScreens); break;
+				}
 			}
 		}
 
@@ -54,6 +59,11 @@ protected:
 			AddRegisterRange(0x8000, 0xFFFF, MemoryOperation::Read);
 			_orgPrgRom = vector<uint8_t>(_prgRom, _prgRom + _prgSize);
 			ApplySaveData();
+		}
+
+		if(_romInfo.SubMapperID == 4) {
+			//LED register is at 0x8000-0xBFFF and currently not emulated
+			RemoveRegisterRange(0x8000, 0xBFFF, MemoryOperation::Write);
 		}
 	}
 
@@ -106,7 +116,11 @@ protected:
 			SelectChrPage(0, (value >> 5) & 0x03);
 
 			if(_enableMirroringBit) {
-				SetMirroringType(value & 0x80 ? MirroringType::ScreenBOnly : MirroringType::ScreenAOnly);
+				if(_romInfo.SubMapperID == 3) {
+					SetMirroringType(value & 0x80 ? MirroringType::Vertical : MirroringType::Horizontal);
+				} else {
+					SetMirroringType(value & 0x80 ? MirroringType::ScreenBOnly : MirroringType::ScreenAOnly);
+				}
 			}
 		} else {
 			_flash->Write((addr & 0x3FFF) | (_prgBank << 14), value);

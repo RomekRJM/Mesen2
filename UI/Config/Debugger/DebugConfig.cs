@@ -61,8 +61,13 @@ namespace Mesen.Config
 				SnesBreakOnCop = Debugger.Snes.BreakOnCop,
 				SnesBreakOnWdm = Debugger.Snes.BreakOnWdm,
 				SnesBreakOnStp = Debugger.Snes.BreakOnStp,
+				SnesBreakOnInvalidPpuAccess = Debugger.Snes.BreakOnInvalidPpuAccess,
+				SnesBreakOnReadDuringAutoJoy = Debugger.Snes.BreakOnReadDuringAutoJoy,
 				SnesUseAltSpcOpNames = Debugger.Snes.UseAltSpcOpNames,
 				SnesIgnoreDspReadWrites = Debugger.Snes.IgnoreDspReadWrites,
+
+				SpcBreakOnBrk = Debugger.Snes.SpcBreakOnBrk,
+				SpcBreakOnStpSleep = Debugger.Snes.SpcBreakOnStpSleep,
 
 				GbBreakOnInvalidOamAccess = Debugger.Gameboy.GbBreakOnInvalidOamAccess,
 				GbBreakOnInvalidVramAccess = Debugger.Gameboy.GbBreakOnInvalidVramAccess,
@@ -73,12 +78,15 @@ namespace Mesen.Config
 
 				NesBreakOnBrk = Debugger.Nes.BreakOnBrk,
 				NesBreakOnUnofficialOpCode = Debugger.Nes.BreakOnUnofficialOpCode,
+				NesBreakOnUnstableOpCode = Debugger.Nes.BreakOnUnstableOpCode,
 				NesBreakOnCpuCrash = Debugger.Nes.BreakOnCpuCrash,
 				NesBreakOnBusConflict = Debugger.Nes.BreakOnBusConflict,
 				NesBreakOnDecayedOamRead = Debugger.Nes.BreakOnDecayedOamRead,
-				NesBreakOnPpu2000ScrollGlitch = Debugger.Nes.BreakOnPpu2000ScrollGlitch,
-				NesBreakOnPpu2006ScrollGlitch = Debugger.Nes.BreakOnPpu2006ScrollGlitch,
-				NesBreakOnExtOutputMode = Debugger.Nes.NesBreakOnExtOutputMode,
+				NesBreakOnPpuScrollGlitch = Debugger.Nes.BreakOnPpuScrollGlitch,
+				NesBreakOnExtOutputMode = Debugger.Nes.BreakOnExtOutputMode,
+				NesBreakOnInvalidVramAccess = Debugger.Nes.BreakOnInvalidVramAccess,
+				NesBreakOnInvalidOamWrite = Debugger.Nes.BreakOnInvalidOamWrite,
+				NesBreakOnDmaInputRead = Debugger.Nes.BreakOnDmaInputRead,
 
 				PceBreakOnBrk = Debugger.Pce.BreakOnBrk,
 				PceBreakOnUnofficialOpCode = Debugger.Pce.BreakOnUnofficialOpCode,
@@ -89,6 +97,7 @@ namespace Mesen.Config
 				GbaBreakOnInvalidOpCode = Debugger.Gba.BreakOnInvalidOpCode,
 				GbaBreakOnNopLoad = Debugger.Gba.BreakOnNopLoad,
 				GbaBreakOnUnalignedMemAccess = Debugger.Gba.BreakOnUnalignedMemAccess,
+				GbaDisMode = Debugger.Gba.DisassemblyMode,
 
 				WsBreakOnUndefinedOpCode = Debugger.Ws.BreakOnUndefinedOpCode,
 
@@ -124,8 +133,13 @@ namespace Mesen.Config
 		[MarshalAs(UnmanagedType.I1)] public bool SnesBreakOnCop;
 		[MarshalAs(UnmanagedType.I1)] public bool SnesBreakOnWdm;
 		[MarshalAs(UnmanagedType.I1)] public bool SnesBreakOnStp;
+		[MarshalAs(UnmanagedType.I1)] public bool SnesBreakOnInvalidPpuAccess;
+		[MarshalAs(UnmanagedType.I1)] public bool SnesBreakOnReadDuringAutoJoy;
 		[MarshalAs(UnmanagedType.I1)] public bool SnesUseAltSpcOpNames;
 		[MarshalAs(UnmanagedType.I1)] public bool SnesIgnoreDspReadWrites;
+
+		[MarshalAs(UnmanagedType.I1)] public bool SpcBreakOnBrk;
+		[MarshalAs(UnmanagedType.I1)] public bool SpcBreakOnStpSleep;
 
 		[MarshalAs(UnmanagedType.I1)] public bool GbBreakOnInvalidOamAccess;
 		[MarshalAs(UnmanagedType.I1)] public bool GbBreakOnInvalidVramAccess;
@@ -136,12 +150,15 @@ namespace Mesen.Config
 
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnBrk;
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnUnofficialOpCode;
+		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnUnstableOpCode;
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnCpuCrash;
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnBusConflict;
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnDecayedOamRead;
-		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnPpu2000ScrollGlitch;
-		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnPpu2006ScrollGlitch;
+		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnPpuScrollGlitch;
 		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnExtOutputMode;
+		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnInvalidVramAccess;
+		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnInvalidOamWrite;
+		[MarshalAs(UnmanagedType.I1)] public bool NesBreakOnDmaInputRead;
 
 		[MarshalAs(UnmanagedType.I1)] public bool PceBreakOnBrk;
 		[MarshalAs(UnmanagedType.I1)] public bool PceBreakOnUnofficialOpCode;
@@ -152,6 +169,7 @@ namespace Mesen.Config
 		[MarshalAs(UnmanagedType.I1)] public bool GbaBreakOnNopLoad;
 		[MarshalAs(UnmanagedType.I1)] public bool GbaBreakOnInvalidOpCode;
 		[MarshalAs(UnmanagedType.I1)] public bool GbaBreakOnUnalignedMemAccess;
+		public GbaDisassemblyMode GbaDisMode;
 		
 		[MarshalAs(UnmanagedType.I1)] public bool WsBreakOnUndefinedOpCode;
 

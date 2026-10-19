@@ -1,7 +1,7 @@
 #pragma once
 #include "pch.h"
-#include "GBA/GbaMemoryManager.h"
-#include "GBA/GbaCpu.h"
+#include "GBA/GbaWaitStates.h"
+#include "GBA/GbaConsole.h"
 #include "Utilities/ISerializable.h"
 #include "Utilities/Serializer.h"
 
@@ -9,8 +9,8 @@ class GbaRomPrefetch final : ISerializable
 {
 private:
 	GbaRomPrefetchState _state = {};
-	GbaMemoryManager* _memoryManager = nullptr;
-	GbaCpu* _cpu = nullptr;
+	GbaWaitStates* _waitStates = nullptr;
+	GbaConsole* _console = nullptr;
 
 	__forceinline bool IsEmpty()
 	{
@@ -24,12 +24,7 @@ private:
 
 	__forceinline bool IsRomBoundary()
 	{
-		//When the prefetcher hits an address that's a multiple of 128kb,
-		//it behaves as if it was filled (blocking any more fetches until
-		//it gets emptied)
-		bool result = (_state.PrefetchAddr & 0x1FFFE) == 0;
-		_state.BoundaryCyclePenalty = (uint8_t)result;
-		return result;
+		return (_state.PrefetchAddr & 0x1FFFE) == 0;
 	}
 
 	__forceinline uint8_t WaitForPendingRead()
@@ -54,25 +49,27 @@ private:
 	{
 		_state.ReadAddr += 2;
 		_state.PrefetchAddr += 2;
-		if(IsRomBoundary()) {
-			_state.WasFilled = true;
-		}
 		_state.ClockCounter = 0;
 		_state.Sequential = true;
 	}
 
 	__forceinline uint8_t GetAccessClockCount()
 	{
-		uint8_t count = _memoryManager->GetWaitStates(GbaAccessMode::HalfWord | (_state.Sequential ? GbaAccessMode::Sequential : 0), _state.PrefetchAddr) + _state.BoundaryCyclePenalty;
-		_state.BoundaryCyclePenalty = 0;
-		return count;
+		return _waitStates->GetPrefetchWaitStates(GbaAccessMode::HalfWord | (_state.Sequential ? GbaAccessMode::Sequential : 0), _state.PrefetchAddr);
+	}
+
+	__noinline void TriggerCpuFreeze()
+	{
+		//Prefetch unit can't read more data because it was filled and needs to be emptied to resume.
+		//But the CPU needs more data to continue - this causes the system to hang (prefetcher_branch_thumb_arm_2 test)
+		_console->SetCpuStopFlag();
 	}
 
 public:
-	void Init(GbaMemoryManager* memoryManager, GbaCpu* cpu)
+	void Init(GbaWaitStates* waitStates, GbaConsole* console)
 	{
-		_memoryManager = memoryManager;
-		_cpu = cpu;
+		_waitStates = waitStates;
+		_console = console;
 	}
 
 	GbaRomPrefetchState& GetState()
@@ -86,6 +83,7 @@ public:
 		_state.Started = false;
 		_state.Sequential = false;
 		_state.WasFilled = false;
+		_state.HitBoundary = false;
 		_state.ReadAddr = 0;
 		_state.PrefetchAddr = 0;
 		_state.ClockCounter = 0;
@@ -102,18 +100,13 @@ public:
 		}
 	}
 
-	__forceinline void SetSuspendState(bool suspended)
+	__forceinline bool NeedExec(bool prefetchEnabled)
 	{
-		//Prefetch is suspended by DMA once DMA accesses ROM
-		_state.Suspended = suspended;
+		return _state.ReadAddr > 0 && !IsFull() && (prefetchEnabled || _state.ClockCounter > 0);
 	}
 
 	void Exec(uint8_t clocks, bool prefetchEnabled)
 	{
-		if(_state.Suspended || _state.ReadAddr == 0 || IsFull() || (!prefetchEnabled && _state.ClockCounter == 0)) {
-			return;
-		}
-
 		_state.Started = true;
 
 		if(_state.WasFilled) {
@@ -129,10 +122,19 @@ public:
 			}
 
 			if(--_state.ClockCounter == 0) {
-				_state.PrefetchAddr += 2;
+				if(!_state.HitBoundary) {
+					//Prefetch fails to increment past boundary and keeps trying to read the same address
+					_state.PrefetchAddr += 2;
+				}
+
 				//Any cpu access after the prefetch stops should be non-sequential
-				_cpu->ClearSequentialFlag();
-				if(IsFull() || IsRomBoundary()) {
+				_console->ClearCpuSequentialFlag();
+
+				if(IsRomBoundary()) {
+					_state.HitBoundary = true;
+				}
+
+				if(IsFull()) {
 					_state.WasFilled = true;
 					break;
 				}
@@ -160,23 +162,23 @@ public:
 				//Prefetcher is disabled & empty (but a prefetch read might be in-progress)
 				if(_state.ClockCounter == 0) {
 					//No prefetch is in progress - read normally
-					return _memoryManager->GetWaitStates(mode, addr);
+					return _waitStates->GetPrefetchWaitStates(mode, addr);
 				} else {
 					//Finish the current prefetch read
 					uint8_t totalTime = WaitForPendingRead();
-					_cpu->ClearSequentialFlag();
+					_console->ClearCpuSequentialFlag();
 					if(mode & GbaAccessMode::Word) {
 						//If fetching a 32-bit value, add the time it'll take to read the next half-word (non sequential)
-						totalTime += _memoryManager->GetWaitStates(GbaAccessMode::HalfWord, addr);
+						totalTime += _waitStates->GetPrefetchWaitStates(GbaAccessMode::HalfWord, addr);
 						
 						//The previous read counts as the first non-sequential read, next one should be sequential
-						_cpu->SetSequentialFlag();
+						_console->SetCpuSequentialFlag();
 					}
 					return totalTime;
 				}
 			}
 		} else {
-			if(addr != _state.ReadAddr) {
+			if((addr & ((mode & GbaAccessMode::Word) ? ~0x03 : ~0)) != _state.ReadAddr) {
 				//Restart prefetch, need to read an entire opcode
 				uint8_t totalTime = Reset();
 				_state.PrefetchAddr = addr;
@@ -203,36 +205,47 @@ public:
 			if(!IsEmpty()) {
 				//Data is already available, return it without any additional delay
 				_state.ReadAddr += 2;
-				Exec(1, prefetchEnabled);
+				if(NeedExec(prefetchEnabled)) {
+					Exec(1, prefetchEnabled);
+				}
 				return 1;
 			} else {
+				if(_state.WasFilled) {
+					TriggerCpuFreeze();
+				}
+
 				//Prefetch in progress, wait until it ends
 				if constexpr(!prefetchEnabled) {
 					if(_state.ClockCounter == 0) {
 						//Prefetch is disabled and no pending read is in progress, but the CPU needs to read an extra half-word (ARM mode)
-						uint8_t totalTime = _memoryManager->GetWaitStates(GbaAccessMode::HalfWord, addr);
+						uint8_t totalTime = _waitStates->GetPrefetchWaitStates(GbaAccessMode::HalfWord, addr);
 						//The previous read counts as the first non-sequential read, next one should be sequential
-						_cpu->SetSequentialFlag();
+						_console->SetCpuSequentialFlag();
 						return totalTime;
 					}
 				}
 				return WaitForPendingRead();
 			}
 		} else {
-			Exec(1, prefetchEnabled);
+			if(NeedExec(prefetchEnabled)) {
+				Exec(1, prefetchEnabled);
+			}
 			return 1;
 		}
 	}
 	
 	void Serialize(Serializer& s) override
 	{
+		if(s.GetFormat() == SerializeFormat::Map) {
+			return;
+		}
+
 		SV(_state.ClockCounter);
 		SV(_state.ReadAddr);
 		SV(_state.PrefetchAddr);
-		SV(_state.BoundaryCyclePenalty);
-		SV(_state.Suspended);
 		SV(_state.WasFilled);
 		SV(_state.Sequential);
 		SV(_state.Started);
+		SV(_state.HitBoundary);
 	}
 };

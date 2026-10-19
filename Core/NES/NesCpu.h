@@ -59,11 +59,11 @@ private:
 	bool _prevNeedNmi = false;
 	bool _needNmi = false;
 
-	uint64_t _lastCrashWarning = 0;
+	uint64_t _hideCrashWarning = 0;
 	bool _isDmcDmaRead = false;
 
 	__forceinline void StartCpuCycle(bool forRead);
-	__forceinline void ProcessPendingDma(uint16_t readAddress);
+	__forceinline void ProcessPendingDma(uint16_t readAddress, MemoryOperationType opType);
 	uint8_t ProcessDmaRead(uint16_t addr, uint16_t& prevReadAddress, bool enableInternalRegReads, bool isNesBehavior);
 	__forceinline uint16_t FetchOperand();
 	__forceinline void EndCpuCycle(bool forRead);
@@ -513,15 +513,18 @@ private:
 		JMP(GetOperand());
 	}
 	void JMP_Ind() { JMP(GetInd()); }
+
 	void JSR() {
-		uint16_t addr = GetOperand();
+		uint8_t lo = ReadByte();
 		DummyRead();
-		Push((uint16_t)(PC() - 1));
+		Push(PC());
+		uint16_t addr = (ReadByte() << 8) | lo;
 		JMP(addr);
 	}
+
 	void RTS() {
-		uint16_t addr = PopWord();
 		DummyRead();
+		uint16_t addr = PopWord();
 		DummyRead();
 		SetPC(addr + 1);
 	}
@@ -780,16 +783,12 @@ private:
 	}
 
 	//Unimplemented/Incorrect Unofficial OP codes
-	void HLT()
-	{
-		//normally freezes the cpu, we can probably assume nothing will ever call this
-		GetOperandValue();
-	}
+	void HLT();
 
-	void UNK()
+	void ANE()
 	{
-		//Make sure we take the right amount of cycles (not reliable for operations that write to memory, etc.)
-		GetOperandValue();
+		uint8_t imm = GetOperandValue();
+		SetA((A() | 0xEE) & X() & imm);
 	}
 
 	void LAS()

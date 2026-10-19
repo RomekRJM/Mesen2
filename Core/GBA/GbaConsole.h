@@ -83,6 +83,7 @@ public:
 
 	GbaCpu* GetCpu();
 	GbaPpu* GetPpu();
+	GbaApu* GetApu();
 	GbaDmaController* GetDmaController();
 	GbaState GetState();
 	void GetConsoleState(BaseState& state, ConsoleType consoleType) override;
@@ -115,6 +116,10 @@ public:
 	RomFormat GetRomFormat() override;
 	AudioTrackInfo GetAudioTrackInfo() override;
 	void ProcessAudioPlayerAction(AudioPlayerActionParams p) override;
+
+	void ClearCpuSequentialFlag();
+	void SetCpuSequentialFlag();
+	void SetCpuStopFlag();
 
 	void RefreshRamCheats();
 

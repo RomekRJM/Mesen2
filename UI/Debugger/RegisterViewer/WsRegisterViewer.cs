@@ -79,7 +79,7 @@ public class WsRegisterViewer
 			new RegEntry("$05.0-6", "First Sprite Index", ppu.FirstSpriteIndex, Format.X8),
 			new RegEntry("$06", "Sprite Count", ppu.SpriteCount, Format.X8),
 			new RegEntry("$07.0-3", "Screen 1 Address", "$" + ppu.BgLayers[0].MapAddress.ToString("X4"), ppu.BgLayers[0].MapAddress >> 11),
-			new RegEntry("$07.4-7", "Screen 1 Address", "$" + ppu.BgLayers[1].MapAddress.ToString("X4"), ppu.BgLayers[1].MapAddress >> 11),
+			new RegEntry("$07.4-7", "Screen 2 Address", "$" + ppu.BgLayers[1].MapAddress.ToString("X4"), ppu.BgLayers[1].MapAddress >> 11),
 			new RegEntry("$08", "Screen 2 Window Left", ppu.BgWindow.Left, Format.X8),
 			new RegEntry("$09", "Screen 2 Window Top", ppu.BgWindow.Top, Format.X8),
 			new RegEntry("$0A", "Screen 2 Window Right", ppu.BgWindow.Right, Format.X8),
@@ -378,7 +378,8 @@ public class WsRegisterViewer
 				new RegEntry("$C4/C5", "Read Data", ws.CartEeprom.ReadBuffer, Format.X16),
 				new RegEntry("$C6/C7", "Command", ws.CartEeprom.Command, Format.X16),
 				new RegEntry("$C8.0", "Read Done", ws.CartEeprom.ReadDone),
-				new RegEntry("$C8.1", "Idle", ws.CartEeprom.Idle)
+				new RegEntry("$C8.1", "Idle", ws.CartEeprom.Idle),
+				new RegEntry("", "Write Disabled", ws.CartEeprom.WriteDisabled)
 			});
 		}
 
@@ -429,6 +430,7 @@ public class WsRegisterViewer
 			new RegEntry("$BE.0", "Read Done", ws.InternalEeprom.ReadDone),
 			new RegEntry("$BE.1", "Idle", ws.InternalEeprom.Idle),
 			new RegEntry("$BE.7", "Write Protection", ws.InternalEeprom.InternalEepromWriteProtected),
+			new RegEntry("", "Write Disabled", ws.InternalEeprom.WriteDisabled)
 		});
 
 		return new RegisterViewerTab("Misc", entries, CpuType.Ws, MemoryType.WsPort);

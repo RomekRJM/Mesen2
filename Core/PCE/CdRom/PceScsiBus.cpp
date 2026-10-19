@@ -37,8 +37,8 @@ void PceScsiBus::SetPhase(ScsiPhase phase)
 	//LogDebug("[SCSI] Phase changed: " + string(magic_enum::enum_name(phase)));
 
 	switch(_state.Phase) {
-		case ScsiPhase::BusFree: _cdrom->ClearIrqSource(PceCdRomIrqSource::DataTransferDone); break;
-		
+		case ScsiPhase::BusFree: break;
+
 		case ScsiPhase::Command:
 			_readSectorCounter = 0; //stop any pending disc access?
 			SetSignals(Bsy, Cd, Req);
@@ -47,6 +47,25 @@ void PceScsiBus::SetPhase(ScsiPhase phase)
 		case ScsiPhase::DataIn: SetSignals(Bsy, Io); break;
 		case ScsiPhase::MessageIn: SetSignals(Bsy, Cd, Io, Msg, Req); break;
 		case ScsiPhase::Status: SetSignals(Bsy, Cd, Io, Req); break;
+		case ScsiPhase::Busy: SetSignals(Bsy); break;
+	}
+
+	UpdateIrqState();
+}
+
+void PceScsiBus::UpdateIrqState()
+{
+	if(_state.Signals[Req] && _state.Signals[Io] && _state.Signals[Bsy]) {
+		if(_state.Signals[Cd]) {
+			//Status / Message In
+			_cdrom->SetIrqSource(PceCdRomIrqSource::StatusMsgIn);
+		} else {
+			//Data In
+			_cdrom->SetIrqSource(PceCdRomIrqSource::DataIn);
+		}
+	} else {
+		_cdrom->ClearIrqSource(PceCdRomIrqSource::StatusMsgIn);
+		_cdrom->ClearIrqSource(PceCdRomIrqSource::DataIn);
 	}
 }
 
@@ -61,6 +80,7 @@ void PceScsiBus::Reset()
 	_cmdBuffer.clear();
 	_dataBuffer.clear();
 	_cdrom->GetAudioPlayer().Stop();
+	UpdateIrqState();
 	//LogDebug("[SCSI] Reset");
 }
 
@@ -104,9 +124,11 @@ void PceScsiBus::QueueDriveUpdate(ScsiUpdateType action, uint32_t delay)
 {
 	//The delays used with QueueDriveUpdate are all approximations
 	//and haven't been validated beyond what the validator.pce test rom checks
-	_updateType = action;
-	_updateCounter = delay;
-	_needExec = true;
+	if(action != _updateType || _updateCounter == 0) {
+		_updateType = action;
+		_updateCounter = delay;
+		_needExec = true;
+	}
 }
 
 void PceScsiBus::ProcessDataInPhase()
@@ -119,12 +141,9 @@ void PceScsiBus::ProcessDataInPhase()
 			_dataBuffer.pop_front();
 			SetSignals(Req);
 		} else {
-			//If there's no data in the buffer, clear the data ready IRQ
-			_cdrom->ClearIrqSource(PceCdRomIrqSource::DataTransferReady);
-
 			if(_state.SectorsToRead == 0) {
-				//If this is the last sector to read, set the transfer done irq (after a delay)
-				QueueDriveUpdate(ScsiUpdateType::SetTransferDoneIrq, 1000);
+				//If this is the last sector to read, set status phase (after a delay, which will trigger an irq)
+				QueueDriveUpdate(ScsiUpdateType::SetGoodStatus, 1000);
 			}
 		}
 	}
@@ -168,7 +187,7 @@ void PceScsiBus::LogCommand(string msg)
 		return;
 	}
 
-	msg = "[SCSI] CMD: " + msg + " - ";
+	msg = "[SCSI] CMD: " + msg + " -";
 	for(size_t i = 0, len = _cmdBuffer.size(); i < len; i++) {
 		msg += " $" + HexUtilities::ToHex(_cmdBuffer[i]);
 	}
@@ -219,6 +238,10 @@ void PceScsiBus::CmdRead()
 
 	if(sectorsToRead == 0) {
 		LogCommand("Read - No sectors to read");
+		SetStatusMessage(ScsiStatus::Good, 0);
+		return;
+	} else if(sector >= _disc->DiscSectorCount) {
+		LogCommand("Read - invalid sector, command ignored: " + std::to_string(sector));
 		SetStatusMessage(ScsiStatus::Good, 0);
 		return;
 	}
@@ -274,6 +297,12 @@ void PceScsiBus::CmdAudioStartPos()
 {
 	uint32_t startSector = GetAudioLbaPos();
 
+	if(startSector >= _disc->DiscSectorCount) {
+		LogCommand("Audio Start Position - invalid sector, command ignored: " + std::to_string(startSector));
+		SetStatusMessage(ScsiStatus::Good, 0);
+		return;
+	}
+
 	if(_emu->IsDebugging()) {
 		uint32_t fromSector = _cdrom->GetCurrentSector();
 		uint32_t seekTime = PceCdSeekDelay::GetSeekTimeMs(_cdrom->GetCurrentSector(), startSector);
@@ -290,7 +319,8 @@ void PceScsiBus::CmdAudioStartPos()
 		player.Play(startSector, false);
 	}
 
-	ClearSignals(Req);
+	//Keep the drive/scsi bus in a busy state (Bsy+Cd set) until audio starts playing
+	SetPhase(ScsiPhase::Busy);
 }
 
 void PceScsiBus::CmdAudioEndPos()
@@ -303,13 +333,19 @@ void PceScsiBus::CmdAudioEndPos()
 		case 1: player.SetEndPosition(endSector, CdPlayEndBehavior::Loop); break;
 		case 2: player.SetEndPosition(endSector, CdPlayEndBehavior::Irq); break;
 		case 3: player.SetEndPosition(endSector, CdPlayEndBehavior::Stop); break;
+		case 4: break; //TODOPCE - the cd-rom might support this?
+	}
+
+	if(_cmdBuffer[1] == 1 || _cmdBuffer[1] == 2) {
+		//Mode 1/2 keep the drive/scsi bus in a busy state (until playback ends, in mode 2)
+		SetPhase(ScsiPhase::Busy);
+	} else {
+		SetStatusMessage(ScsiStatus::Good, 0);
 	}
 
 	if(_emu->IsDebugging()) {
 		LogCommand("Audio End Position - " + std::to_string(endSector));
 	}
-
-	SetStatusMessage(ScsiStatus::Good, 0);
 }
 
 void PceScsiBus::CmdPause()
@@ -329,7 +365,7 @@ void PceScsiBus::CmdTestReadyUnit()
 
 	//Emulating this delay accurately just makes booting up games longer and is very unlikely
 	//to have any impact on games, so the delay is set to a much smaller value. (~100x less)
-	QueueDriveUpdate(ScsiUpdateType::SetDataInPhase, 150000);
+	QueueDriveUpdate(ScsiUpdateType::SetGoodStatus, 150000);
 }
 
 void PceScsiBus::CmdReadSubCodeQ()
@@ -352,7 +388,7 @@ void PceScsiBus::CmdReadSubCodeQ()
 		(isData ? 0x40 : 0x00) //Control field - Bit 2: clear = audio track, set = data track
 	);
 
-	uint32_t sectorGap = track >= 0 ? (_disc->Tracks[track].FirstSector - sector) : 0;
+	uint32_t sectorGap = track >= 0 ? (sector - _disc->Tracks[track].FirstSector) : 0;
 	DiscPosition relPos = DiscPosition::FromLba(sectorGap);
 	DiscPosition absPos = DiscPosition::FromLba(sector);
 
@@ -464,8 +500,6 @@ void PceScsiBus::ProcessDiscRead()
 				_stateChanged = true;
 				_needExec = true;
 
-				_cdrom->SetIrqSource(PceCdRomIrqSource::DataTransferReady);
-
 				if(_state.SectorsToRead == 0) {
 					_readSectorCounter = 0;
 					LogDebug("[SCSI] Read operation done");
@@ -533,10 +567,12 @@ void PceScsiBus::SetSignalValue(::ScsiSignal::ScsiSignal signal, bool val)
 
 void PceScsiBus::SetAckWithAutoClear()
 {
-	//Set the Ack signal for 45 master clocks (and then clear it again)
+	//Set the Ack signal for 21 master clocks (and then clear it again)
 	//Used after manually reading a byte of data (or after ADPCM DMA reads one)
+	//The 21 master clocks is based on hardware measurements that
+	//show that ACK is cleared ~1 microsecond after being set
 	SetSignals(Ack);
-	_ackClearCounter = 15*3;
+	_ackClearCounter = 7*3;
 	_needExec = true;
 }
 
@@ -590,17 +626,10 @@ void PceScsiBus::Exec()
 		switch(_updateType) {
 			case ScsiUpdateType::SetCmdPhase: SetPhase(ScsiPhase::Command); break;
 			case ScsiUpdateType::SetReqSignal: SetSignals(Req); break;
-
-			case ScsiUpdateType::SetDataInPhase:
-				SetPhase(ScsiPhase::DataIn);
-				break;
-
+			case ScsiUpdateType::SetDataInPhase: SetPhase(ScsiPhase::DataIn); break;
+			
 			case ScsiUpdateType::SetTransferDoneIrq:
-				_cdrom->SetIrqSource(PceCdRomIrqSource::DataTransferDone);
-				SetStatusMessage(ScsiStatus::Good, 0);
-				break;
-
-			case ScsiUpdateType::SetGoodStatus:
+			case ScsiUpdateType::SetGoodStatus: 
 				SetStatusMessage(ScsiStatus::Good, 0);
 				break;
 		}

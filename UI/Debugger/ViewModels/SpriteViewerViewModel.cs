@@ -73,9 +73,9 @@ namespace Mesen.Debugger.ViewModels
 		private bool _refreshPending;
 
 		[Obsolete("For designer only")]
-		public SpriteViewerViewModel() : this(CpuType.Snes, new PictureViewer(), new Grid(), new Control(), null) { }
+		public SpriteViewerViewModel() : this(CpuType.Snes, new(), new(), new(), new(), null) { }
 
-		public SpriteViewerViewModel(CpuType cpuType, PictureViewer picViewer, Grid spriteGrid, Control listView, Window? wnd)
+		public SpriteViewerViewModel(CpuType cpuType, PictureViewer picViewer, ScrollPictureViewer scrollViewer, Grid spriteGrid, Control listView, Window? wnd)
 		{
 			Config = ConfigManager.Config.Debug.SpriteViewer.Clone();
 
@@ -147,7 +147,7 @@ namespace Mesen.Debugger.ViewModels
 				return;
 			}
 
-			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, new List<object> {
+			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, scrollViewer, new List<object> {
 				GetEditTileAction(wnd),
 				GetViewInMemoryViewerAction(),
 				GetViewInTileViewerAction(),
@@ -341,6 +341,9 @@ namespace Mesen.Debugger.ViewModels
 			entries.AddSeparator("MiscSeparator");
 
 			entries.AddEntry("Visibility", ResourceHelper.GetEnumText(sprite.Visibility));
+			if(sprite.Mode != DebugSpriteMode.Undefined) {
+				entries.AddEntry("Mode", sprite.Mode);
+			}
 			entries.AddEntry("Horizontal mirror", sprite.HorizontalMirror);
 			entries.AddEntry("Vertical mirror", sprite.VerticalMirror);
 			if(sprite.TransformEnabled != NullableBoolean.Undefined) {
@@ -349,8 +352,6 @@ namespace Mesen.Debugger.ViewModels
 					entries.AddEntry("Transform Param Index", sprite.TransformParamIndex);
 				}
 			}
-			entries.AddEntry("Blending", sprite.BlendingEnabled);
-			entries.AddEntry("Window", sprite.WindowMode);
 			entries.AddEntry("Mosaic", sprite.MosaicEnabled);
 			entries.AddEntry("Second table", sprite.UseSecondTable);
 
@@ -528,7 +529,8 @@ namespace Mesen.Debugger.ViewModels
 					});
 				}
 
-				_coreData.Palette = DebugApi.GetPaletteInfo(CpuType);
+				DebugPaletteInfo palette = DebugApi.GetPaletteInfo(CpuType);
+				_coreData.Palette = palette.ColorCount > 0 ? palette : null;
 			}
 			RefreshTab();
 		}

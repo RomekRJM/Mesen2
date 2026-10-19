@@ -9,13 +9,13 @@
 #include "Debugger/MemoryDumper.h"
 #include "Debugger/MemoryAccessCounter.h"
 #include "Debugger/ExpressionEvaluator.h"
-#include "Debugger/CodeDataLogger.h"
 #include "Debugger/StepBackManager.h"
 #include "PCE/PceConsole.h"
 #include "PCE/PceCpu.h"
 #include "PCE/PceVdc.h"
 #include "PCE/PceVce.h"
 #include "PCE/PceVpc.h"
+#include "PCE/PcePsg.h"
 #include "PCE/PceMemoryManager.h"
 #include "PCE/Input/PceController.h"
 #include "PCE/Debugger/PceDebugger.h"
@@ -71,6 +71,11 @@ PceDebugger::PceDebugger(Debugger* debugger) : IDebugger(debugger->GetEmulator()
 PceDebugger::~PceDebugger()
 {
 	_codeDataLogger->SaveCdlFile(_cdlFile);
+}
+
+void PceDebugger::OnBeforeBreak(CpuType cpuType)
+{
+	_console->GetPsg()->Run();
 }
 
 void PceDebugger::Reset()
@@ -219,6 +224,13 @@ void PceDebugger::ProcessWrite(uint32_t addr, uint8_t value, MemoryOperationType
 	_memoryAccessCounter->ProcessMemoryWrite(addressInfo, _memoryManager->GetState().CycleCount);
 	_step->ProcessCpuCycle();
 	_debugger->ProcessBreakConditions(CpuType::Pce, *_step.get(), _breakpointManager.get(), operation, addressInfo);
+}
+
+void PceDebugger::ProcessIdleCycle()
+{
+	if(_step->ProcessCpuCycle()) {
+		_debugger->SleepUntilResume(CpuType::Pce, BreakSource::CpuStep);
+	}
 }
 
 void PceDebugger::Run()

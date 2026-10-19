@@ -33,6 +33,7 @@ PceAdpcm::~PceAdpcm()
 
 void PceAdpcm::Reset()
 {
+	_state.PlayRequest = false;
 	_state.WriteClockCounter = 0;
 	_state.ReadClockCounter = 0;
 	_state.ReadAddress = 0;
@@ -105,6 +106,10 @@ void PceAdpcm::SetControl(uint8_t value)
 		LogDebug("[ADPCM] Update read addr");
 	}
 
+	if(!_state.Playing && (value & 0x20)) {
+		_state.PlayRequest = true;
+	}
+
 	_state.Control = value;
 	ProcessFlags();
 }
@@ -168,15 +173,19 @@ void PceAdpcm::ProcessDmaRequest()
 			}
 		}
 	} else if(!_scsi->CheckSignal(Ack) && !_scsi->CheckSignal(Cd) && _scsi->CheckSignal(Io) && _scsi->CheckSignal(Req)) {
-		//Some delay is required here according to test rom
-		//Valid range is 10-14 (higher or lower fails the test)
-		_dmaWriteCounter = 12;
+		//Some delay is required here according to "verificator" test rom ("cdd dma timings" test)
+		//Values between 18 to 22 pass the test (higher or lower fails)
+		_dmaWriteCounter = 20;
 	}
 }
 
 uint8_t PceAdpcm::GetClocksToNextSlot(bool forRead)
 {
-	uint64_t slotIndex = _console->GetMasterClock() / 9;
+	//TODOPCE - what's the actual delay for this? 27 master clocks per slot breaks test roms, so that's too slow.
+	//Reads apparently require a minimum delay of 30 cpu cycles (90 master clocks), but this is unstable and 32 cpu cycles (96 master clocks) is safe
+	//Writes apparently are 22 cpu cycles min (66), but 24 cpu cycles is safe (72 master clocks)
+	//This might imply each slot takes ~24 master clocks, but using 18 master clock per slot to be safe for now
+	uint64_t slotIndex = _console->GetMasterClock() / 18;
 	uint8_t slotType = slotIndex & 0x03;
 	uint8_t gap;
 	switch(slotType) {
@@ -186,7 +195,7 @@ uint8_t PceAdpcm::GetClocksToNextSlot(bool forRead)
 		case 3: gap = forRead ? 4 : 2; break; //Read slot
 	}
 
-	uint64_t nextSlotClock = (slotIndex + gap) * 9;
+	uint64_t nextSlotClock = (slotIndex + gap) * 18;
 	return (nextSlotClock - _console->GetMasterClock()) / 3;
 }
 
@@ -195,7 +204,7 @@ void PceAdpcm::Exec()
 	//Called every 3 master clocks
 	ProcessFlags();
 
-	if(_state.Playing || (_state.Control & 0x20)) {
+	if(_state.Playing || _state.PlayRequest || (_state.Control & 0x20)) {
 		_nextSampleCounter += 3;
 		if(_nextSampleCounter >= _clocksPerSample) {
 			PlaySample();
@@ -218,7 +227,7 @@ void PceAdpcm::Exec()
 
 	ProcessFlags();
 
-	_needExec = _state.Playing || (_state.Control & 0x20) || _state.ReadClockCounter || _state.WriteClockCounter || dmaRequested || _dmaWriteCounter;
+	_needExec = _state.Playing || _state.PlayRequest || (_state.Control & 0x20) || _state.ReadClockCounter || _state.WriteClockCounter || dmaRequested || _dmaWriteCounter;
 }
 
 void PceAdpcm::Write(uint16_t addr, uint8_t value)
@@ -292,19 +301,18 @@ void PceAdpcm::PlaySample()
 	if(_state.Control & 0x80) {
 		//Reset flag is enabled
 		_state.Playing = (_state.Control & 0x20) != 0;
+		_state.PlayRequest = false;
 		return;
 	}
 
-	if((_state.Control & 0x40) && _state.AdpcmLength == 0) {
-		_state.Control &= ~0x20;
-	}
-
-	if(!(_state.Control & 0x20)) {
+	if(((_state.Control & 0x40) && _state.AdpcmLength == 0) || !(_state.Control & 0x20) || (!_state.Playing && !_state.PlayRequest)) {
+		_state.PlayRequest = false;
 		_state.Playing = false;
 		return;
 	}
 
-	if(!_state.Playing) {
+	if(_state.PlayRequest) {
+		_state.PlayRequest = false;
 		_state.Playing = true;
 		_currentOutput = 2048;
 		_magnitude = 0;

@@ -102,10 +102,10 @@ void GbaCpu::SwitchMode(GbaCpuMode mode)
 void GbaCpu::ReloadPipeline()
 {
 	GbaCpuPipeline& pipe = _state.Pipeline;
-	pipe.Mode = GbaAccessMode::Prefetch | (_state.CPSR.Thumb ? GbaAccessMode::HalfWord : GbaAccessMode::Word);
+	pipe.Mode = GbaAccessMode::Prefetch | GbaAccessMode::NoRotate | (_state.CPSR.Thumb ? GbaAccessMode::HalfWord : GbaAccessMode::Word);
 
 	pipe.ReloadRequested = false;
-	pipe.Fetch.Address = _state.R[15] = _state.R[15] & (_state.CPSR.Thumb ? ~0x01 : ~0x03);
+	pipe.Fetch.Address = _state.R[15] = _state.R[15] & ~0x01;
 	_prefetch->ForceNonSequential(_state.R[15]);
 
 	pipe.Fetch.OpCode = ReadCode(pipe.Mode, pipe.Fetch.Address);
@@ -124,6 +124,7 @@ void GbaCpu::CheckForIrqs()
 	if(thumb) {
 		_state.R[14] += 2;
 	}
+	ReloadPipeline();
 	ProcessPipeline();
 	_emu->ProcessInterrupt<CpuType::Gba>(originalPc, _state.Pipeline.Execute.Address, false);
 }
@@ -145,11 +146,17 @@ void GbaCpu::ProcessException(GbaCpuMode mode, GbaCpuVector vector)
 uint32_t GbaCpu::ReadCode(GbaAccessModeVal mode, uint32_t addr)
 {
 #ifndef DUMMYCPU
+	if(_ldmGlitch) {
+		_ldmGlitch--;
+	}
+
+	uint32_t value = _memoryManager->Read(mode, addr);
+	_hasPendingIrq = _memoryManager->HasPendingIrq();
+	
 	//Next access should be sequential
-	//This is done before the call to Read() because e.g if DMA pauses the CPU and 
-	//runs, the next access will not be sequential (force-nseq-access test)
 	_state.Pipeline.Mode |= GbaAccessMode::Sequential;
-	return _memoryManager->Read(mode, addr);
+
+	return value;
 #else
 	uint32_t value = _memoryManager->DebugCpuRead(mode, addr);
 	LogMemoryOperation(addr, value, mode, MemoryOperationType::ExecOpCode);
@@ -161,7 +168,12 @@ uint32_t GbaCpu::Read(GbaAccessModeVal mode, uint32_t addr)
 {
 #ifndef DUMMYCPU
 	_state.Pipeline.Mode &= ~GbaAccessMode::Sequential;
-	return _memoryManager->Read(mode, addr);
+	if(_ldmGlitch) {
+		_ldmGlitch--;
+	}
+	uint32_t value = _memoryManager->Read(mode, addr);
+	_hasPendingIrq = _memoryManager->HasPendingIrq();
+	return value;
 #else
 	uint32_t value = _memoryManager->DebugCpuRead(mode, addr);
 	LogMemoryOperation(addr, value, mode, MemoryOperationType::Read);
@@ -173,7 +185,11 @@ void GbaCpu::Write(GbaAccessModeVal mode, uint32_t addr, uint32_t value)
 {
 #ifndef DUMMYCPU
 	_state.Pipeline.Mode &= ~GbaAccessMode::Sequential;
+	if(_ldmGlitch) {
+		_ldmGlitch--;
+	}
 	_memoryManager->Write(mode, addr, value);
+	_hasPendingIrq = _memoryManager->HasPendingIrq();
 #else
 	LogMemoryOperation(addr, value, mode, MemoryOperationType::Write);
 #endif
@@ -183,7 +199,11 @@ void GbaCpu::Idle()
 {
 #ifndef DUMMYCPU
 	_state.Pipeline.Mode &= ~GbaAccessMode::Sequential;
+	if(_ldmGlitch) {
+		_ldmGlitch--;
+	}
 	_memoryManager->ProcessIdleCycle();
+	_hasPendingIrq = _memoryManager->HasPendingIrq();
 #endif
 }
 
@@ -195,11 +215,6 @@ void GbaCpu::Idle(uint8_t cycleCount)
 		case 2: Idle(); [[fallthrough]];
 		case 1: Idle(); break;
 	}
-}
-
-uint32_t GbaCpu::R(uint8_t reg)
-{
-	return _state.R[reg];
 }
 
 GbaCpuFlags& GbaCpu::GetSpsr()
@@ -307,6 +322,13 @@ uint32_t GbaCpu::ShiftRrx(uint32_t value, bool& carry)
 
 void GbaCpu::PowerOn()
 {
+	//"After nRESET has been taken HIGH, the ARM core does two further internal cycles
+	//before the first instruction is fetched from the reset vector"
+	//Fixes the "timer_reset" test
+	_memoryManager->ProcessIdleCycle();
+	_memoryManager->ProcessIdleCycle();
+
+	ReloadPipeline();
 	ProcessPipeline();
 }
 
@@ -354,6 +376,7 @@ void GbaCpu::Serialize(Serializer& s)
 	SV(_state.CPSR.Negative);
 
 	SV(_state.Stopped);
+	SV(_state.Frozen);
 	SVArray(_state.R, 16);
 	SVArray(_state.UserRegs, 7);
 	SVArray(_state.FiqRegs, 7);
@@ -408,4 +431,7 @@ void GbaCpu::Serialize(Serializer& s)
 	SV(_state.UndefinedSpsr.Negative);
 
 	SV(_state.CycleCount);
+
+	SV(_ldmGlitch);
+	SV(_hasPendingIrq);
 }

@@ -83,7 +83,8 @@ private:
 				accessType |= MemoryAccessType::Write;
 			}
 
-			if(IsNes20() && (_workRamSize == 0x20000 || _saveRamSize == 0x20000)) {
+			if(IsNes20() && (_workRamSize >= 0x10000 || _saveRamSize >= 0x10000)) {
+				//Allow a single block of 64kb/128kb of either save or work ram (licensed games don't do this)
 				bankNumber &= 0x0F;
 				memoryType = HasBattery() ? PrgMemoryType::SaveRam : PrgMemoryType::WorkRam;
 			} else {
@@ -338,7 +339,7 @@ protected:
 		//Override the 2000-2007 registers to catch all writes to the PPU registers (but not their mirrors)
 		_mmc5MemoryHandler.reset(new Mmc5MemoryHandler(_console));
 
-		_splitTileNumber = -1;
+		_splitTileNumber = 0;
 
 		_emptyNametable = new uint8_t[BaseMapper::NametableSize];
 		memset(_emptyNametable, 0, BaseMapper::NametableSize);
@@ -442,16 +443,17 @@ protected:
 					}
 				}
 			}
-			_splitTileNumber = 0;
-			_ntReadCounter = 0;
 		} else if(addr >= 0x2000 && addr <= 0x2FFF) {
 			if(_lastPpuReadAddr == addr) {
 				//Count consecutive identical reads
 				_ntReadCounter++;
-			} else {
-				_ntReadCounter = 0;
+				if(_ntReadCounter >= 2) {
+					_splitTileNumber = 0;
+				}
 			}
-		} else {
+		}
+
+		if(_lastPpuReadAddr != addr) {
 			_ntReadCounter = 0;
 		}
 	}
@@ -461,7 +463,6 @@ protected:
 		bool isNtFetch = addr >= 0x2000 && addr <= 0x2FFF && (addr & 0x3FF) < 0x3C0;
 		if(isNtFetch) {
 			//Nametable data, not an attribute fetch
-			_splitInSplitRegion = false;
 			_splitTileNumber++;
 
 			if(_ppuInFrame) {
@@ -479,21 +480,33 @@ protected:
 
 		if(_extendedRamMode <= 1 && _ppuInFrame) {
 			if(_verticalSplitEnabled) {
-				uint16_t verticalSplitScroll = (_verticalSplitScroll + _scanlineCounter) % 240;
+				uint8_t scanline = _splitTileNumber >= 41 ? _scanlineCounter + 1 : _scanlineCounter;
+				uint8_t verticalSplitScroll = (scanline + _verticalSplitScroll) % 240;
+				uint8_t column = (_splitTileNumber + 2) % 42;
 				if(addr >= 0x2000) {
 					if(isNtFetch) {
-						uint8_t tileNumber = (_splitTileNumber + 2) % 42;
-						if(tileNumber <= 32 && ((_verticalSplitRightSide && tileNumber >= _verticalSplitDelimiterTile) || (!_verticalSplitRightSide && tileNumber < _verticalSplitDelimiterTile))) {
-							//Split region (for next 3 fetches, attribute + 2x tile data)
-							_splitInSplitRegion = true;
-							_splitTile = ((verticalSplitScroll & 0xF8) << 2) | tileNumber;
-							return InternalReadRam(0x5C00 + _splitTile);
-						} else {
+						if(column == 0) {
+							_splitInSplitRegion = !_verticalSplitRightSide;
+						}
+
+						if(column == _verticalSplitDelimiterTile && _splitTileNumber < 42) {
+							//Enter/exit split section when the current column matches the column number written to $5200
+							_splitInSplitRegion = !_splitInSplitRegion;
+						} else if(column > 32) {
 							//Outside of split region (or sprite data), result can get modified by ex ram mode code below
 							_splitInSplitRegion = false;
 						}
+
+						if(_splitInSplitRegion) {
+							//In vertical split region, override data received by the PPU
+							_splitTile = ((verticalSplitScroll & 0xF8) << 2) | column;
+							return _mapperRam[_splitTile];
+						}
 					} else if(_splitInSplitRegion) {
-						return InternalReadRam(0x5FC0 | ((_splitTile & 0x380) >> 4) | ((_splitTile & 0x1F) >> 2));
+						uint8_t shift = ((_splitTile >> 4) & 0x04) | (_splitTile & 0x02);
+						uint16_t atAddr = 0x3C0 | ((_splitTile & 0x380) >> 4) | ((_splitTile & 0x1F) >> 2);
+						uint8_t palette = (_mapperRam[atAddr] >> shift) & 0x03;
+						return palette * 0x55; //copy the bottom 2 bits to the other 6 bits
 					}
 				} else if(_splitInSplitRegion) {
 					//CHR tile fetches for split region
@@ -526,7 +539,7 @@ protected:
 
 							//Return a byte containing the same palette 4 times - this allows the PPU to select the right palette no matter the shift value
 							uint8_t palette = (value & 0xC0) >> 6;
-							return palette | palette << 2 | palette << 4 | palette << 6;
+							return palette * 0x55; //copy the bottom 2 bits to the other 6 bits
 						}
 
 						case 1:

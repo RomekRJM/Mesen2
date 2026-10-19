@@ -114,7 +114,7 @@ Debugger::Debugger(Emulator* emu, IConsole* console)
 	_breakRequestCount = 0;
 	_suspendRequestCount = 0;
 
-	_cdlManager->RefreshCodeCache();
+	_cdlManager->RefreshCodeCache(false);
 
 	if(_emu->IsPaused()) {
 		//Break on the current instruction if emulation was already paused
@@ -362,6 +362,7 @@ void Debugger::ProcessIdleCycle()
 	switch(type) {
 		case CpuType::Snes: GetDebugger<type, SnesDebugger>()->ProcessIdleCycle(); break;
 		case CpuType::Sa1: GetDebugger<type, SnesDebugger>()->ProcessIdleCycle(); break;
+		case CpuType::Pce: GetDebugger<type, PceDebugger>()->ProcessIdleCycle(); break;
 	}
 }
 
@@ -466,6 +467,10 @@ void Debugger::SleepUntilResume(CpuType sourceCpu, BreakSource source, MemoryOpe
 {
 	if(_suspendRequestCount) {
 		return;
+	} else if(_executionStopped) {
+		//Prevent re-entry, which can happen when OnBeforeBreak() below is called, which causes the SPC to run and can trigger a pause.
+		//Specifically, this happens when resetting the SNES with the "Break on power/reset" option disabled.
+		return;
 	} else if(_breakRequestCount > 0 && (sourceCpu != _mainCpuType || !_debuggers[(int)sourceCpu].Debugger->AllowChangeProgramCounter)) {
 		//When a break is requested by e.g a debugger call, load/save state, etc. always
 		//break in-between 2 instructions of the main CPU, ensuring the state can be saved/loaded safely
@@ -480,6 +485,7 @@ void Debugger::SleepUntilResume(CpuType sourceCpu, BreakSource source, MemoryOpe
 	
 	bool notificationSent = false;
 	if(source != BreakSource::Unspecified || _breakRequestCount == 0) {
+		GetMainDebugger()->OnBeforeBreak(sourceCpu);
 		_emu->OnBeforePause(false);
 
 		if(_settings->GetDebugConfig().SingleBreakpointPerInstruction) {
@@ -588,7 +594,9 @@ void Debugger::ProcessEvent(EventType type, std::optional<CpuType> cpuTypeOpt)
 			break;
 
 		case EventType::StartFrame: {
-			_emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::EventViewerRefresh, (void*)evtCpuType);
+			if(!_emu->IsDebuggerBlocked()) {
+				_emu->GetNotificationManager()->SendNotification(ConsoleNotificationType::EventViewerRefresh, (void*)evtCpuType);
+			}
 			BaseEventManager* evtMgr = GetEventManager(evtCpuType);
 			if(evtMgr) {
 				evtMgr->ClearFrameEvents();
@@ -789,19 +797,24 @@ bool Debugger::IsDebugWindowOpened(CpuType cpuType)
 
 bool Debugger::IsBreakOptionEnabled(BreakSource src)
 {
+	DebugConfig& cfg = _settings->GetDebugConfig();
 	switch(src) {
-		case BreakSource::GbDisableLcdOutsideVblank: return _settings->GetDebugConfig().GbBreakOnDisableLcdOutsideVblank;
-		case BreakSource::GbInvalidVramAccess: return _settings->GetDebugConfig().GbBreakOnInvalidVramAccess;
-		case BreakSource::GbInvalidOamAccess: return _settings->GetDebugConfig().GbBreakOnInvalidOamAccess;
-		case BreakSource::NesBreakOnDecayedOamRead: return _settings->GetDebugConfig().NesBreakOnDecayedOamRead;
-		case BreakSource::NesBreakOnPpu2000ScrollGlitch: return _settings->GetDebugConfig().NesBreakOnPpu2000ScrollGlitch;
-		case BreakSource::NesBreakOnPpu2006ScrollGlitch: return _settings->GetDebugConfig().NesBreakOnPpu2006ScrollGlitch;
-		case BreakSource::NesBusConflict: return _settings->GetDebugConfig().NesBreakOnBusConflict;
-		case BreakSource::NesBreakOnCpuCrash: return _settings->GetDebugConfig().NesBreakOnCpuCrash;
-		case BreakSource::NesBreakOnExtOutputMode: return _settings->GetDebugConfig().NesBreakOnExtOutputMode;
-		case BreakSource::PceBreakOnInvalidVramAddress: return _settings->GetDebugConfig().PceBreakOnInvalidVramAddress;
-		case BreakSource::GbaInvalidOpCode: return _settings->GetDebugConfig().GbaBreakOnInvalidOpCode;
-		case BreakSource::GbaUnalignedMemoryAccess: return _settings->GetDebugConfig().GbaBreakOnUnalignedMemAccess;
+		case BreakSource::GbDisableLcdOutsideVblank: return cfg.GbBreakOnDisableLcdOutsideVblank;
+		case BreakSource::GbInvalidVramAccess: return cfg.GbBreakOnInvalidVramAccess;
+		case BreakSource::GbInvalidOamAccess: return cfg.GbBreakOnInvalidOamAccess;
+		case BreakSource::NesBreakOnDecayedOamRead: return cfg.NesBreakOnDecayedOamRead;
+		case BreakSource::NesBreakOnPpuScrollGlitch: return cfg.NesBreakOnPpuScrollGlitch;
+		case BreakSource::NesBusConflict: return cfg.NesBreakOnBusConflict;
+		case BreakSource::NesBreakOnCpuCrash: return cfg.NesBreakOnCpuCrash;
+		case BreakSource::NesBreakOnExtOutputMode: return cfg.NesBreakOnExtOutputMode;
+		case BreakSource::NesInvalidVramAccess: return cfg.NesBreakOnInvalidVramAccess;
+		case BreakSource::NesInvalidOamWrite: return cfg.NesBreakOnInvalidOamWrite;
+		case BreakSource::NesDmaInputRead: return cfg.NesBreakOnDmaInputRead;
+		case BreakSource::PceBreakOnInvalidVramAddress: return cfg.PceBreakOnInvalidVramAddress;
+		case BreakSource::GbaInvalidOpCode: return cfg.GbaBreakOnInvalidOpCode;
+		case BreakSource::GbaUnalignedMemoryAccess: return cfg.GbaBreakOnUnalignedMemAccess;
+		case BreakSource::SnesInvalidPpuAccess: return cfg.SnesBreakOnInvalidPpuAccess;
+		case BreakSource::SnesReadDuringAutoJoy: return cfg.SnesBreakOnReadDuringAutoJoy;
 	}
 	return true;
 }
@@ -981,9 +994,9 @@ uint32_t Debugger::GetProgramCounter(CpuType cpuType, bool getInstPc)
 	return _debuggers[(int)cpuType].Debugger->GetProgramCounter(getInstPc);
 }
 
-uint8_t Debugger::GetCpuFlags(CpuType cpuType)
+uint8_t Debugger::GetCpuFlags(CpuType cpuType, uint32_t addr)
 {
-	return _debuggers[(int)cpuType].Debugger->GetCpuFlags();
+	return _debuggers[(int)cpuType].Debugger->GetCpuFlags(addr);
 }
 
 CpuInstructionProgress Debugger::GetInstructionProgress(CpuType cpuType)
@@ -1038,6 +1051,8 @@ void Debugger::Log(string message)
 		_debuggerLog.pop_front();
 	}
 	_debuggerLog.push_back(message);
+
+	std::cout << message << std::endl;
 }
 
 string Debugger::GetLog()
@@ -1245,6 +1260,7 @@ template void Debugger::ProcessMemoryAccess<CpuType::Ws, MemoryType::WsCartEepro
 
 template void Debugger::ProcessIdleCycle<CpuType::Snes>();
 template void Debugger::ProcessIdleCycle<CpuType::Sa1>();
+template void Debugger::ProcessIdleCycle<CpuType::Pce>();
 
 template void Debugger::ProcessHaltedCpu<CpuType::Snes>();
 template void Debugger::ProcessHaltedCpu<CpuType::Spc>();

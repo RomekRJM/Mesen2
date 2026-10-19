@@ -21,7 +21,6 @@
 #include "Shared/BatteryManager.h"
 #include "Shared/CheatManager.h"
 #include "Shared/SystemActionManager.h"
-#include "Shared/Movies/MovieManager.h"
 #include "Shared/TimingInfo.h"
 #include "Shared/HistoryViewer.h"
 #include "Netplay/GameServer.h"
@@ -30,7 +29,6 @@
 #include "Shared/Interfaces/IBarcodeReader.h"
 #include "Shared/Interfaces/ITapeRecorder.h"
 #include "Shared/BaseControlManager.h"
-#include "Shared/SystemActionManager.h"
 #include "SNES/SnesConsole.h"
 #include "SNES/SnesDefaultVideoFilter.h"
 #include "NES/NesConsole.h"
@@ -238,7 +236,7 @@ void Emulator::OnBeforeSendFrame()
 {
 	if(!_isRunAheadFrame) {
 		if(_audioPlayerHud) {
-			_audioPlayerHud->Draw();
+			_audioPlayerHud->Draw(GetFrameCount(), GetFps());
 		}
 
 		if(_stats && _settings->GetPreferences().ShowDebugInfo) {
@@ -349,6 +347,9 @@ void Emulator::ReloadRom(bool forPowerCycle)
 			//Power cycle failed (rom not longer exists, etc.), reset flag
 			//(otherwise power cycle will continue to be attempted on each frame)
 			_systemActionManager->ResetState();
+
+			//Unsuspend debugger, otherwise deadlocks can occur after a power cycle fails when the debugger is active
+			SuspendDebugger(true);
 		}
 	}
 }
@@ -360,16 +361,22 @@ void Emulator::PowerCycle()
 
 bool Emulator::LoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
 {
+	bool result = false;
 	try {
-		return InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
+		result = InternalLoadRom(romFile, patchFile, stopRom, forPowerCycle);
 	} catch(std::exception& ex) {
 		_videoDecoder->StartThread();
 		_videoRenderer->StartThread();
 
 		MessageManager::DisplayMessage("Error", "UnexpectedError", ex.what());
 		Stop(false, true, false);
-		return false;
 	}
+
+	if(!result) {
+		_notificationManager->SendNotification(ConsoleNotificationType::GameLoadFailed);
+	}
+
+	return result;
 }
 
 bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool stopRom, bool forPowerCycle)
@@ -405,6 +412,8 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	if(patchFile.IsValid()) {
 		if(romFile.ApplyPatch(patchFile)) {
 			MessageManager::DisplayMessage("Patch", "ApplyingPatch", patchFile.GetFileName());
+		} else {
+			MessageManager::DisplayMessage("Patch", "PatchFailed", patchFile.GetFileName());
 		}
 	}
 
@@ -431,7 +440,6 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 	TryLoadRom(romFile, result, console, true);
 	
 	if(result != LoadRomResult::Success) {
-		_notificationManager->SendNotification(ConsoleNotificationType::GameLoadFailed);
 		MessageManager::DisplayMessage("Error", "CouldNotLoadFile", romFile.GetFileName());
 		if(debugger) {
 			_debugger.reset(debugger);
@@ -484,7 +492,7 @@ bool Emulator::InternalLoadRom(VirtualFile romFile, VirtualFile patchFile, bool 
 
 	_rewindManager->InitHistory();
 
-	if(debuggerActive) {
+	if(debuggerActive || _settings->CheckFlag(EmulationFlags::ConsoleMode)) {
 		InitDebugger();
 	}
 
@@ -1085,7 +1093,7 @@ void Emulator::StopDebugger()
 
 bool Emulator::IsEmulationThread()
 {
-	return _emulationThreadId == std::this_thread::get_id();
+	return _emulationThreadId == _currentThreadId;
 }
 
 void Emulator::SetStopCode(int32_t stopCode)
@@ -1165,3 +1173,5 @@ template void Emulator::AddDebugEvent<CpuType::Snes>(DebugEventType evtType);
 template void Emulator::AddDebugEvent<CpuType::Gameboy>(DebugEventType evtType);
 template void Emulator::AddDebugEvent<CpuType::Nes>(DebugEventType evtType);
 template void Emulator::AddDebugEvent<CpuType::Pce>(DebugEventType evtType);
+
+thread_local std::thread::id Emulator::_currentThreadId = std::this_thread::get_id();

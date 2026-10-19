@@ -72,11 +72,13 @@ namespace Mesen.Debugger.ViewModels
 		private byte[] _coreSourceData = Array.Empty<byte>();
 		private byte[] _sourceData = Array.Empty<byte>();
 		private bool _refreshPending;
+		private bool _inGameLoaded;
+		private bool _preventPresetLoad;
 
 		[Obsolete("For designer only")]
-		public TileViewerViewModel() : this(CpuType.Snes, new PictureViewer(), null) { }
+		public TileViewerViewModel() : this(CpuType.Snes, new(), new(), null) { }
 
-		public TileViewerViewModel(CpuType cpuType, PictureViewer picViewer, Window? wnd)
+		public TileViewerViewModel(CpuType cpuType, PictureViewer picViewer, ScrollPictureViewer scrollViewer, Window? wnd)
 		{
 			Config = ConfigManager.Config.Debug.TileViewer.Clone();
 			CpuType = cpuType;
@@ -138,7 +140,7 @@ namespace Mesen.Debugger.ViewModels
 				},
 			});
 
-			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, new List<object> {
+			AddDisposables(DebugShortcutManager.CreateContextMenu(picViewer, scrollViewer, new List<object> {
 				new ContextMenuAction() {
 					ActionType = ActionType.EditTile,
 					HintText = () => $"{GridSizeX}px x {GridSizeY}px",
@@ -294,8 +296,12 @@ namespace Mesen.Debugger.ViewModels
 			MaximumAddress = Math.Max(0, DebugApi.GetMemorySize(Config.Source) - 1);
 
 			Dispatcher.UIThread.Post(() => {
-				Config.SelectedPreset = selectedPreset;
-				LoadSelectedPreset(true);
+				if(!_preventPresetLoad) {
+					//Don't load the preset when the tile viewer was opened via "View in tile viewer"
+					Config.SelectedPreset = selectedPreset;
+					LoadSelectedPreset(true);
+				}
+				_preventPresetLoad = false;
 			});
 		}
 
@@ -319,9 +325,11 @@ namespace Mesen.Debugger.ViewModels
 
 		public void SelectTile(MemoryType type, int address, TileFormat format, TileLayout layout, int paletteIndex)
 		{
+			_preventPresetLoad = true;
+			Config.SelectedPreset = "";
 			Config.Source = type;
 			Config.Format = format;
-			SelectedPalette = paletteIndex;
+			SelectedPalette = Math.Max(0, paletteIndex);
 			Config.StartAddress = address / AddressIncrement * AddressIncrement;
 			Config.Layout = layout;
 			PixelSize tileSize = Config.Format.GetTileSize();
@@ -409,7 +417,9 @@ namespace Mesen.Debugger.ViewModels
 
 		private void Config_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			RefreshTab();
+			if(!_inGameLoaded) {
+				RefreshTab();
+			}
 		}
 
 		public void RefreshData()
@@ -460,7 +470,7 @@ namespace Mesen.Debugger.ViewModels
 
 		private void InternalRefreshTab()
 		{
-			if(Disposed) {
+			if(Disposed || PaletteColors.Length == 0) {
 				return;
 			}
 
@@ -650,8 +660,10 @@ namespace Mesen.Debugger.ViewModels
 		public void OnGameLoaded()
 		{
 			Dispatcher.UIThread.Post(() => {
+				_inGameLoaded = true;
 				InitForCpuType();
 				RefreshData();
+				_inGameLoaded = false;
 			});
 		}
 
@@ -794,10 +806,10 @@ namespace Mesen.Debugger.ViewModels
 					return new() {
 						CreatePreset(0, "VRAM", () => ApplyPpuPreset()),
 						CreatePreset(0, "ROM", () => ApplyPrgPreset()),
-						CreatePreset(1, "BG1", () => ApplyBgPreset(0)),
-						CreatePreset(1, "BG2", () => ApplyBgPreset(1)),
-						CreatePreset(1, "BG3", () => ApplyBgPreset(2)),
-						CreatePreset(1, "BG4", () => ApplyBgPreset(3)),
+						CreatePreset(1, "BG0", () => ApplyBgPreset(0)),
+						CreatePreset(1, "BG1", () => ApplyBgPreset(1)),
+						CreatePreset(1, "BG2", () => ApplyBgPreset(2)),
+						CreatePreset(1, "BG3", () => ApplyBgPreset(3)),
 						CreatePreset(2, "Sprites", () => ApplySpritePreset(0)),
 					};
 

@@ -108,6 +108,8 @@ namespace Mesen.Windows
 			_mainMenu = this.GetControl<MainMenuView>("MainMenu");
 			ConfigManager.Config.MainWindow.LoadWindowSettings(this);
 
+			Console.CancelKeyPress += Console_CancelKeyPress;
+
 #if DEBUG
 			this.AttachDevTools();
 #endif
@@ -132,12 +134,6 @@ namespace Mesen.Windows
 			hotkeyConfig.Cut.Add(new KeyGesture(Key.Delete, KeyModifiers.Shift));
 		}
 
-		protected override void ArrangeCore(Rect finalRect)
-		{
-			//TODOv2 why is this needed to make resizing the window by setting ClientSize work?
-			base.ArrangeCore(new Rect(ClientSize));
-		}
-
 		protected override void OnClosing(WindowClosingEventArgs e)
 		{
 			base.OnClosing(e);
@@ -145,27 +141,35 @@ namespace Mesen.Windows
 				e.Cancel = true;
 				ValidateExit();
 			} else {
-				//Close all other windows first
-				DebugWindowManager.CloseAllWindows();
-				foreach(Window wnd in ApplicationHelper.GetOpenedWindows()) {
-					if(wnd != this) {
-						wnd.Close();
-					}
-				}
-
-				if(ApplicationHelper.GetOpenedWindows().Count > 1) {
+				if(!CloseEmu(false)) {
 					e.Cancel = true;
-					return;
 				}
-
-				_timerBackgroundFlag.Stop();
-				EmuApi.Stop();
-				_listener?.Dispose();
-				EmuApi.Release();
-				ConfigManager.Config.MainWindow.SaveWindowSettings(this);
-				ConfigManager.Config.Save();
-				_isClosing = true;
 			}
+		}
+
+		private bool CloseEmu(bool force)
+		{
+			//Close all other windows first
+			DebugWindowManager.CloseAllWindows();
+			foreach(Window wnd in ApplicationHelper.GetOpenedWindows()) {
+				if(wnd != this) {
+					wnd.Close();
+				}
+			}
+
+			if(!force && ApplicationHelper.GetOpenedWindows().Count > 1) {
+				return false;
+			}
+
+			_timerBackgroundFlag.Stop();
+			EmuApi.Stop();
+			_listener?.Dispose();
+			EmuApi.Release();
+			ConfigManager.Config.MainWindow.SaveWindowSettings(this);
+			ConfigManager.Config.Save();
+			_isClosing = true;
+
+			return true;
 		}
 
 		private async void ValidateExit()
@@ -180,6 +184,14 @@ namespace Mesen.Windows
 		{
 			base.OnClosed(e);
 			_mouseManager?.Dispose();
+		}
+
+		private void Console_CancelKeyPress(object? sender, ConsoleCancelEventArgs e)
+		{
+			_needCloseValidation = false;
+			Dispatcher.UIThread.Post(() => {
+				CloseEmu(true);
+			});
 		}
 
 		private void OnDrop(object? sender, DragEventArgs e)
@@ -338,6 +350,12 @@ namespace Mesen.Windows
 					Dispatcher.UIThread.Post(() => {
 						ApplicationHelper.GetExistingWindow<HdPackBuilderWindow>()?.Close();
 					});
+
+					LoadRomHelper.ResetReloadCounter();
+					break;
+
+				case ConsoleNotificationType.GameLoadFailed:
+					LoadRomHelper.ResetReloadCounter();
 					break;
 
 				case ConsoleNotificationType.DebuggerResumed:
@@ -484,7 +502,8 @@ namespace Mesen.Windows
 
 				double width = Math.Max(MinWidth, Math.Round(screenSize.Height * aspectRatio * scale) / dpiScale);
 				double height = Math.Max(MinHeight, screenSize.Height * scale / dpiScale);
-				ClientSize = new Size(width, height + menuHeight + _audioPlayer.Bounds.Height);
+				Width = width;
+				Height = height + menuHeight + _audioPlayer.Bounds.Height;
 				ResizeRenderer();
 			} else if(WindowState == WindowState.Maximized || WindowState == WindowState.FullScreen) {
 				_rendererSize = new Size(Math.Round(screenSize.Width * scale * aspectRatio) / dpiScale, Math.Round(screenSize.Height * scale) / dpiScale);
@@ -556,7 +575,8 @@ namespace Mesen.Windows
 					Dispatcher.UIThread.Post(() => {
 						WindowState = _prevWindowState;
 						if(_prevWindowState == WindowState.Normal) {
-							ClientSize = _originalSize;
+							Width = _originalSize.Width;
+							Height = _originalSize.Height;
 							Position = _originalPos;
 						}
 						_preventFullscreenToggle = false;

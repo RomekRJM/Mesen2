@@ -40,6 +40,8 @@ void SdlRenderer::SetExclusiveFullscreenMode(bool fullscreen, void* windowHandle
 
 bool SdlRenderer::Init()
 {
+	const char* originalHint = SDL_GetHint("SDL_VIDEODRIVER");
+	SDL_SetHint("SDL_VIDEODRIVER", "x11");
 	if(SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
 		LogSdlError("[SDL] Failed to initialize video subsystem.");
 		return false;
@@ -47,8 +49,22 @@ bool SdlRenderer::Init()
 
 	_sdlWindow = SDL_CreateWindowFrom(_windowHandle);
 	if(!_sdlWindow) {
-		LogSdlError("[SDL] Failed to create window from handle.");
-		return false;
+		MessageManager::Log("[SDL] Failed to create window from handle with SDL_VIDEODRIVER=x11, retry with default...");
+
+		SDL_QuitSubSystem(SDL_INIT_VIDEO);
+		SDL_SetHint("SDL_VIDEODRIVER", originalHint);
+		if(SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
+			LogSdlError("[SDL] Failed to initialize video subsystem.");
+			return false;
+		}
+
+		_sdlWindow = SDL_CreateWindowFrom(_windowHandle);
+		if(!_sdlWindow) {
+			LogSdlError("[SDL] Failed to create window from handle.");
+			return false;
+		} else {
+			MessageManager::Log("[SDL] Window creation succeeded with default driver.");
+		}
 	}
 
 	if(SDL_GL_LoadLibrary(NULL) != 0) {

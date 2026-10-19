@@ -77,6 +77,8 @@ public struct GbDmaControllerState
 	public UInt16 CgbDmaDest;
 	public byte CgbDmaLength;
 	[MarshalAs(UnmanagedType.I1)] public bool CgbHdmaRunning;
+	[MarshalAs(UnmanagedType.I1)] public bool CgbHdmaPending;
+	[MarshalAs(UnmanagedType.I1)] public bool CgbHdmaTrigger;
 };
 
 public struct GbTimerState
@@ -142,6 +144,7 @@ public struct GbCpuState : BaseState
 	[MarshalAs(UnmanagedType.I1)] public bool EiPending;
 	[MarshalAs(UnmanagedType.I1)] public bool IME;
 	[MarshalAs(UnmanagedType.I1)] public bool HaltBug;
+	[MarshalAs(UnmanagedType.I1)] public bool Stopped;
 }
 
 public enum PpuMode

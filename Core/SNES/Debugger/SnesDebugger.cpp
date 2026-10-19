@@ -100,6 +100,14 @@ void SnesDebugger::Init()
 	_dspTraceLogger = _debugger->GetTraceLogger(CpuType::NecDsp);
 }
 
+void SnesDebugger::OnBeforeBreak(CpuType cpuType)
+{
+	//Don't catch up audio when the SPC debugger pauses - this causes a stack overflow
+	if(cpuType != CpuType::Spc) {
+		_console->RunAudio();
+	}
+}
+
 void SnesDebugger::Reset()
 {
 	_callstackManager->Clear();
@@ -486,7 +494,7 @@ uint32_t SnesDebugger::GetProgramCounter(bool getInstPc)
 	return getInstPc ? _prevProgramCounter : ((GetCpuState().K << 16) | GetCpuState().PC);
 }
 
-uint8_t SnesDebugger::GetCpuFlags()
+uint8_t SnesDebugger::GetCpuFlags(uint32_t addr)
 {
 	return GetCpuState().PS & (ProcFlags::IndexMode8 | ProcFlags::MemoryMode8);
 }

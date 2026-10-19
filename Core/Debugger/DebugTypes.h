@@ -325,12 +325,15 @@ enum class BreakSource
 	GbOamCorruption,
 
 	NesBreakOnDecayedOamRead,
-	NesBreakOnPpu2000ScrollGlitch,
-	NesBreakOnPpu2006ScrollGlitch,
+	NesBreakOnPpuScrollGlitch,
 	BreakOnUnofficialOpCode,
+	BreakOnUnstableOpCode,
 	NesBusConflict,
 	NesBreakOnCpuCrash,
 	NesBreakOnExtOutputMode,
+	NesInvalidVramAccess,
+	NesInvalidOamWrite,
+	NesDmaInputRead,
 
 	PceBreakOnInvalidVramAddress,
 	
@@ -339,6 +342,9 @@ enum class BreakSource
 	GbaInvalidOpCode,
 	GbaNopLoad,
 	GbaUnalignedMemoryAccess,
+
+	SnesInvalidPpuAccess,
+	SnesReadDuringAutoJoy,
 
 	BreakOnUndefinedOpCode
 };

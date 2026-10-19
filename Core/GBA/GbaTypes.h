@@ -92,6 +92,7 @@ struct GbaCpuState : BaseState
 	uint32_t R[16];
 	GbaCpuFlags CPSR;
 	bool Stopped;
+	bool Frozen;
 
 	uint32_t UserRegs[7];
 	uint32_t FiqRegs[7];
@@ -110,13 +111,20 @@ struct GbaCpuState : BaseState
 	uint64_t CycleCount;
 };
 
+enum class GbaBgStereoMode : uint8_t
+{
+	Disabled,
+	EvenColumns,
+	OddColumns,
+	Both
+};
+
 struct GbaBgConfig
 {
 	uint16_t Control;
 	uint16_t TilemapAddr;
 	uint16_t TilesetAddr;
 	uint16_t ScrollX;
-	uint16_t ScrollXLatch;
 	uint16_t ScrollY;
 	uint8_t ScreenSize;
 	bool DoubleWidth;
@@ -127,6 +135,8 @@ struct GbaBgConfig
 	bool Bpp8Mode;
 	bool Enabled;
 	uint8_t EnableTimer;
+	uint8_t DisableTimer;
+	GbaBgStereoMode StereoMode;
 };
 
 struct GbaTransformConfig
@@ -141,6 +151,7 @@ struct GbaTransformConfig
 
 	bool PendingUpdateX;
 	bool PendingUpdateY;
+	bool NeedInit;
 };
 
 struct GbaWindowConfig
@@ -164,7 +175,7 @@ enum class GbaPpuObjMode : uint8_t
 	Normal,
 	Blending,
 	Window,
-	Invalid
+	Stereoscopic
 };
 
 namespace GbaPpuMemAccess
@@ -191,7 +202,8 @@ struct GbaPpuState : BaseState
 	bool AllowHblankOamAccess;
 	bool ObjVramMappingOneDimension;
 	bool ForcedBlank;
-	bool GreenSwapEnabled;
+	uint8_t ForcedBlankDisableTimer;
+	bool StereoscopicEnabled;
 
 	uint8_t Control2;
 	uint8_t ObjEnableTimer;
@@ -263,11 +275,10 @@ struct GbaRomPrefetchState
 	uint32_t ReadAddr;
 	uint32_t PrefetchAddr;
 	uint8_t ClockCounter;
-	uint8_t BoundaryCyclePenalty;
-	bool Suspended;
 	bool WasFilled;
 	bool Started;
 	bool Sequential;
+	bool HitBoundary;
 };
 
 struct GbaTimerState
@@ -309,6 +320,7 @@ enum class GbaDmaAddrMode : uint8_t
 
 struct GbaDmaChannel
 {
+	uint64_t StartClock;
 	uint32_t ReadValue;
 
 	uint32_t Destination;
@@ -496,6 +508,19 @@ struct GbaApuDebugState
 	GbaNoiseState Noise;
 };
 
+struct GbaGpioState
+{
+	uint8_t Data;
+	uint8_t WritablePins;
+	bool ReadWrite;
+};
+
+struct GbaCartState
+{
+	bool HasGpio;
+	GbaGpioState Gpio;
+};
+
 struct GbaState
 {
 	GbaCpuState Cpu;
@@ -506,6 +531,7 @@ struct GbaState
 	GbaTimersState Timer;
 	GbaRomPrefetchState Prefetch;
 	GbaControlManagerState ControlManager;
+	GbaCartState Cart;
 };
 
 enum class GbaThumbOpCategory
@@ -562,4 +588,6 @@ public:
 	static constexpr uint32_t ScreenWidth = 240;
 	static constexpr uint32_t ScreenHeight = 160;
 	static constexpr uint32_t PixelCount = GbaConstants::ScreenWidth * GbaConstants::ScreenHeight;
+	
+	static constexpr uint32_t ScanlineCount = 228;
 };

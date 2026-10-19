@@ -19,7 +19,6 @@
 #include "Debugger/Debugger.h"
 #include "Debugger/MemoryAccessCounter.h"
 #include "Debugger/ExpressionEvaluator.h"
-#include "Debugger/MemoryDumper.h"
 #include "Debugger/CodeDataLogger.h"
 #include "Debugger/BaseEventManager.h"
 #include "Debugger/StepBackManager.h"
@@ -61,7 +60,7 @@ WsDebugger::WsDebugger(Debugger* debugger) : IDebugger(debugger->GetEmulator())
 	_step.reset(new StepRequest());
 	_assembler.reset(new WsAssembler(debugger->GetLabelManager()));
 	
-	_dummyCpu.reset(new DummyWsCpu(_emu, _memoryManager));
+	_dummyCpu.reset(new DummyWsCpu(_emu, _console, _memoryManager));
 
 	ResetPrevOpCode();
 }
@@ -75,6 +74,11 @@ void WsDebugger::Reset()
 {
 	_callstackManager->Clear();
 	ResetPrevOpCode();
+}
+
+void WsDebugger::OnBeforeBreak(CpuType cpuType)
+{
+	_memoryManager->OnBeforeBreak();
 }
 
 void WsDebugger::ProcessInstruction()

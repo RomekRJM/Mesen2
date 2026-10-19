@@ -42,6 +42,8 @@ public:
 	GbaCart();
 	~GbaCart();
 
+	GbaCartState GetState();
+
 	void Init(Emulator* emu, GbaConsole* console, GbaMemoryManager* memoryManager, GbaSaveType saveType, GbaRtcType rtcType, GbaCartridgeType cartType);
 
 	template<bool checkEeprom>
@@ -51,7 +53,7 @@ public:
 			if((addr & _eepromMask) == _eepromAddr) {
 				return ReadEeprom(addr);
 			}
-		} else if(_gpio && addr >= 0x80000C4 && addr <= 0x80000C9) {
+		} else if(_gpio && addr >= 0x80000C4 && addr <= 0x80000C9 && _gpio->CanRead()) {
 			return _gpio->Read(addr);
 		}
 

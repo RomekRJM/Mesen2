@@ -22,11 +22,14 @@
 		<Style Selector="WrapPanel > CheckBox">
 			<Setter Property="Margin" Value="0 0 7 0" />
 		</Style>
+		<Style Selector="CheckBox">
+			<Setter Property="ToolTip.ShowDelay" Value="100" />
+		</Style>
 	</UserControl.Styles>
 
-	<StackPanel>
+	<StackPanel Margin="3 0">
 		<c:OptionSection Header="{l:Translate lblDisassemblyOptions}" Margin="0">
-			<Grid ColumnDefinitions="Auto,Auto,*" RowDefinitions="Auto,Auto,Auto">
+			<Grid ColumnDefinitions="Auto,Auto,*" RowDefinitions="Auto,Auto,Auto,Auto">
 				<TextBlock VerticalAlignment="Center" Text="{l:Translate lblVerifiedData}" />
 				<c:EnumComboBox
 					Grid.Column="1"
@@ -40,8 +43,34 @@
 					Width="105"
 					SelectedItem="{Binding Config.UnidentifiedBlockDisplay}"
 				/>
+
+				<TextBlock
+					IsVisible="{Binding IsGba}"
+					Grid.Row="2"
+					VerticalAlignment="Center"
+					Text="{l:Translate lblDisassemblyMode}"
+				/>
+				<DockPanel Grid.Row="2" Grid.Column="1" IsVisible="{Binding IsGba}">
+					<Image
+						Source="/Assets/Help.png"
+						Stretch="None"
+						Margin="4 4"
+						DockPanel.Dock="Right"
+						VerticalAlignment="Top"
+						HorizontalAlignment="Right"
+						ToolTip.Tip="{l:Translate lblDisassemblyModeHint}"
+						ToolTip.ShowDelay="0"
+						ToolTip.HorizontalOffset="10"
+						ToolTip.Placement="Bottom"
+					/>
+					<c:EnumComboBox
+						Grid.Row="2"
+						Grid.Column="1"
+						SelectedItem="{Binding Config.Gba.DisassemblyMode}"
+					/>
+				</DockPanel>
 				
-				<DockPanel Grid.Row="2" Grid.ColumnSpan="2">
+				<DockPanel Grid.Row="3" Grid.ColumnSpan="2">
 					<TextBlock VerticalAlignment="Center" Text="{l:Translate lblAddressDisplay}" />
 					<c:EnumComboBox SelectedItem="{Binding Config.AddressDisplayType}" />
 				</DockPanel>
@@ -88,6 +117,25 @@
 					IsChecked="{Binding Config.Snes.BreakOnStp}"
 					Content="{l:Translate chkBreakOnStp}"
 				/>
+				<Rectangle Stroke="#AAA" Height="1" StrokeThickness="1" HorizontalAlignment="Stretch" Margin="0 2" />
+				<CheckBox
+					IsChecked="{Binding Config.Snes.BreakOnInvalidPpuAccess}"
+					Content="{l:Translate chkBreakOnInvalidPpuAccess}"
+				/>
+				<CheckBox
+					IsChecked="{Binding Config.Snes.BreakOnReadDuringAutoJoy}"
+					Content="{l:Translate chkBreakOnReadDuringAutoJoy}"
+				/>
+			</StackPanel>
+			<StackPanel IsVisible="{Binding IsSpc}">
+				<CheckBox
+					IsChecked="{Binding Config.Snes.SpcBreakOnBrk}"
+					Content="{l:Translate chkBreakOnBrk}"
+				/>
+				<CheckBox
+					IsChecked="{Binding Config.Snes.SpcBreakOnStpSleep}"
+					Content="{l:Translate chkSpcBreakOnStpSleep}"
+				/>
 			</StackPanel>
 			<StackPanel IsVisible="{Binding IsGameboy}">
 				<CheckBox
@@ -128,6 +176,11 @@
 					Content="{l:Translate chkBreakOnUnofficialOpCode}"
 				/>
 				<CheckBox
+					IsChecked="{Binding Config.Nes.BreakOnUnstableOpCode}"
+					Content="{l:Translate chkBreakOnUnstableOpCode}"
+					ToolTip.Tip="{l:Translate chkBreakOnUnstableOpCodeHint}"
+				/>
+				<CheckBox
 					IsChecked="{Binding Config.Nes.BreakOnCpuCrash}"
 					Content="{l:Translate chkBreakOnCpuCrash}"
 				/>
@@ -141,15 +194,23 @@
 					Content="{l:Translate chkBreakOnDecayedOamRead}"
 				/>
 				<CheckBox
-					IsChecked="{Binding Config.Nes.BreakOnPpu2000ScrollGlitch}"
-					Content="{l:Translate chkBreakOnPpu2000ScrollGlitch}"
+					IsChecked="{Binding Config.Nes.BreakOnDmaInputRead}"
+					Content="{l:Translate chkNesDmaInputRead}"
 				/>
 				<CheckBox
-					IsChecked="{Binding Config.Nes.BreakOnPpu2006ScrollGlitch}"
-					Content="{l:Translate chkBreakOnPpu2006ScrollGlitch}"
+					IsChecked="{Binding Config.Nes.BreakOnInvalidOamWrite}"
+					Content="{l:Translate chkNesInvalidOamWrite}"
 				/>
 				<CheckBox
-					IsChecked="{Binding Config.Nes.NesBreakOnExtOutputMode}"
+					IsChecked="{Binding Config.Nes.BreakOnInvalidVramAccess}"
+					Content="{l:Translate chkNesInvalidVramAccess}"
+				/>
+				<CheckBox
+					IsChecked="{Binding Config.Nes.BreakOnPpuScrollGlitch}"
+					Content="{l:Translate chkBreakOnPpuScrollGlitch}"
+				/>
+				<CheckBox
+					IsChecked="{Binding Config.Nes.BreakOnExtOutputMode}"
 					Content="{l:Translate chkNesBreakOnExtOutputMode}"
 				/>
 			</StackPanel>
@@ -193,7 +254,7 @@
 					Content="{l:Translate chkBreakOnUndefinedOpCode}"
 				/>
 			</StackPanel>
-			<Rectangle Stroke="#AAA" Height="1" StrokeThickness="1" HorizontalAlignment="Stretch" Margin="0 2" />
+			<Rectangle  IsVisible="{Binding HasSpecificBreakOptions}" Stroke="#AAA" Height="1" StrokeThickness="1" HorizontalAlignment="Stretch" Margin="0 2" />
 			<CheckBox
 				IsChecked="{Binding Config.BreakOnUninitRead}"
 				Content="{l:Translate chkBreakOnUninitRead}"

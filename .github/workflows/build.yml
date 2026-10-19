@@ -35,7 +35,10 @@ jobs:
           msbuild-architecture: x64
 
       - name: Restore packages
-        run: dotnet restore -p:TargetFramework="${{ matrix.platform.targetframework }}" -r win-x64 -p:PublishAot="${{ matrix.platform.aot }}"
+        run: dotnet restore -p:TargetFramework="${{ matrix.platform.targetframework }}" -r win-x64 -p:PublishAot="${{ matrix.platform.aot }}" -p:BuildWithNetFrameworkHostedCompiler=true
+
+      - name: Write commit SHA1 to file
+        uses: ./.github/actions/build-sha1-action
 
       - name: Build Mesen
         run: msbuild -nologo -v:d -clp:ForceConsoleColor -m -p:Configuration=Release -p:Platform=x64 -t:Clean,UI -p:TargetFramework="${{ matrix.platform.targetframework }}"
@@ -55,13 +58,13 @@ jobs:
     strategy:
       matrix:
         compiler: [gcc, clang, clang_aot]
-        os: [ubuntu-22.04, ubuntu-20.04]
+        platform: [
+          {os: ubuntu-22.04, path: x64},
+          {os: ubuntu-22.04-arm, path: arm64}
+        ]
         exclude:
-          # This currently fails to build.
-          - os: ubuntu-20.04
-            compiler: gcc
-          # Don't need 2 separate AoT builds
-          - os: ubuntu-22.04
+          # ARM64 AOT build doesn't seem to work properly (crashes when launched)
+          - platform: { os: ubuntu-22.04-arm, path: arm64 }
             compiler: clang_aot
         include:
           - compiler: gcc
@@ -71,7 +74,7 @@ jobs:
           - compiler: clang_aot
             make_flags: "USE_AOT=true"
       fail-fast: false
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.platform.os }}
 
     steps:
       - name: Checkout repo
@@ -87,8 +90,14 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qy
-          sudo apt-get install -qy libsdl2-dev # The compilers are already installed on GitHub's runners.
+          sudo apt-get install -qy libsdl2-dev ccache # The compilers are already installed on GitHub's runners.
 
+      - name: Setup CCache
+        uses: ./.github/actions/setup-ccache-action
+       
+      - name: Write commit SHA1 to file
+        uses: ./.github/actions/build-sha1-action
+        
       # stderr is not detected as a TTY, so diagnostics are by default printed without colours;
       # forcing colours makes the log a little nicer to read.
       - name: Build Mesen
@@ -98,11 +107,18 @@ jobs:
       - name: Upload Mesen
         uses: actions/upload-artifact@v4
         with:
-          name: Mesen (Linux - ${{ matrix.os }} - ${{ matrix.compiler }})
-          path: bin/linux-x64/Release/linux-x64/publish/Mesen
+          name: Mesen (Linux - ${{ matrix.platform.os }} - ${{ matrix.compiler }})
+          path: bin/linux-${{ matrix.platform.path }}/Release/linux-${{ matrix.platform.path }}/publish/Mesen
 
   appimage:
-    runs-on: ubuntu-20.04
+    strategy:
+      matrix:
+        compiler: [clang_appimage]
+        platform: [
+          {os: ubuntu-22.04, name: x64, script: Linux/appimage/appimage.sh},
+          {os: ubuntu-22.04-arm, name: ARM64, script: Linux/appimage/appimage-arm64.sh}
+        ]
+    runs-on: ${{ matrix.platform.os }}
 
     steps:
       - name: Checkout repo
@@ -118,15 +134,21 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qy
-          sudo apt-get install -qy libsdl2-dev libfuse2 # The compilers are already installed on GitHub's runners.
+          sudo apt-get install -qy libsdl2-dev libfuse2 ccache # The compilers are already installed on GitHub's runners.
+
+      - name: Setup CCache
+        uses: ./.github/actions/setup-ccache-action
+
+      - name: Write commit SHA1 to file
+        uses: ./.github/actions/build-sha1-action
 
       - name: Build Mesen (AppImage)
         run: |
-          Linux/appimage/appimage.sh
+          ${{ matrix.platform.script }}
       - name: Upload Mesen (AppImage)
         uses: actions/upload-artifact@v4
         with:
-          name: Mesen (Linux x64 - AppImage)
+          name: Mesen (Linux ${{ matrix.platform.name }} - AppImage)
           path: Mesen.AppImage
 
 
@@ -159,7 +181,19 @@ jobs:
 
       - name: Install dependencies
         run: |
-          brew install sdl2
+          brew install sdl2 ccache
+
+      - name: Get brew prefix
+        run: |
+          echo "brewPrefix=$(brew --prefix)" >> "$GITHUB_ENV"
+
+      - name: Setup CCache
+        uses: ./.github/actions/setup-ccache-action
+        with:
+          ccache-path: '${{ env.brewPrefix }}/opt/ccache/libexec'
+
+      - name: Write commit SHA1 to file
+        uses: ./.github/actions/build-sha1-action
 
       # stderr is not detected as a TTY, so diagnostics are by default printed without colours;
       # forcing colours makes the log a little nicer to read.

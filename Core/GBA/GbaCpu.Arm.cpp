@@ -15,10 +15,19 @@ ArmOpCategory GbaCpu::GetArmOpCategory(uint32_t opCode)
 
 void GbaCpu::ArmBranchExchangeRegister()
 {
+	//A lot of this behavior is not officially documented in the data sheet (and is similar to the behavior of MSR)
+	//Passes png183's "branches" test: https://github.com/png183/gba-tests/blob/master/arm/
+	uint8_t mask = (_opCode >> 16) & 0x0F;
 	uint32_t value = R(_opCode & 0x0F);
-	_state.CPSR.Thumb = (value & 0x01) != 0;
-	_state.R[15] = value;
-	_state.Pipeline.ReloadRequested = true;
+	bool writeToSpsr = _opCode & (1 << 22);
+	if((mask & 0x09) == 0x09) {
+		GbaCpuFlags& flags = writeToSpsr ? GetSpsr() : _state.CPSR;
+		flags.Thumb = (value & 0x01) != 0;
+	} else {
+		SetStatusFlags(writeToSpsr, mask, value);
+	}
+	uint8_t rd = (_opCode >> 12) & 0x0F;
+	SetR(rd, value);
 }
 
 void GbaCpu::ArmBranch()
@@ -59,6 +68,15 @@ void GbaCpu::ArmMsr()
 		value = R(_opCode & 0x0F);
 	}
 
+	SetStatusFlags(writeToSpsr, mask, value);
+}
+
+void GbaCpu::SetStatusFlags(bool writeToSpsr, uint8_t mask, uint32_t value)
+{
+	if(writeToSpsr && (_state.CPSR.Mode == GbaCpuMode::User || _state.CPSR.Mode == GbaCpuMode::System)) {
+		return;
+	}
+
 	GbaCpuFlags& flags = writeToSpsr ? GetSpsr() : _state.CPSR;
 	if(mask & 0x08) {
 		flags.Negative = value & (1 << 31);
@@ -66,7 +84,7 @@ void GbaCpu::ArmMsr()
 		flags.Carry = value & (1 << 29);
 		flags.Overflow = value & (1 << 28);
 	}
-	
+
 	if(mask & 0x01) {
 		if(writeToSpsr || _state.CPSR.Mode != GbaCpuMode::User) {
 			if(!writeToSpsr) {
@@ -185,18 +203,19 @@ void GbaCpu::ArmMultiply()
 
 	MultiplicationOutput output;
 	if(multAndAcc) {
-		output = GbaCpuMultiply::mla(R(rm), R(rs), R(rn));
+		uint32_t acc = R(rn);
+		Idle();
+		output = GbaCpuMultiply::mla(R(rm), R(rs), acc);
 	} else {
 		output = GbaCpuMultiply::mul(R(rm), R(rs));
 	}
 
 	Idle(output.CycleCount);
-	if(multAndAcc) {
-		Idle();
-	}
 
 	uint32_t result = output.Output;
-	SetR(rd, result);
+	if(rd != 15) {
+		SetR(rd, result);
+	}
 	
 	if(updateFlags) {
 		_state.CPSR.Carry = output.Carry;
@@ -218,32 +237,41 @@ void GbaCpu::ArmMultiplyLong()
 	bool multAndAcc = (_opCode & (1 << 21)) != 0;
 	bool sign = (_opCode & (1 << 22)) != 0;
 
+	uint32_t accLo = 0;
+	uint32_t accHi = 0;
+	if(multAndAcc) {
+		accLo = R(rl);
+		accHi = R(rh);
+		Idle();
+	}
+
 	Idle();
 
 	MultiplicationOutput output;
 	if(sign) {
 		if(multAndAcc) {
-			output = GbaCpuMultiply::smlal(R(rl), R(rh), R(rm), R(rs));
+			output = GbaCpuMultiply::smlal(accLo, accHi, R(rm), R(rs));
 		} else {
 			output = GbaCpuMultiply::smull(R(rm), R(rs));
 		}
 	} else {
 		if(multAndAcc) {
-			output = GbaCpuMultiply::umlal(R(rl), R(rh), R(rm), R(rs));
+			output = GbaCpuMultiply::umlal(accLo, accHi, R(rm), R(rs));
 		} else {
 			output = GbaCpuMultiply::umull(R(rm), R(rs));
 		}
 	}
 
 	Idle(output.CycleCount);
-	if(multAndAcc) {
-		Idle();
-	}
 
 	uint64_t result = output.Output;
 
-	SetR(rl, (uint32_t)result);
-	SetR(rh, (uint32_t)(result >> 32));
+	if(rl != 15) {
+		SetR(rl, (uint32_t)result);
+	}
+	if(rh != 15) {
+		SetR(rh, (uint32_t)(result >> 32));
+	}
 
 	if(updateFlags) {
 		_state.CPSR.Carry = output.Carry;
@@ -353,10 +381,11 @@ void GbaCpu::ArmSignedHalfDataTransfer()
 		}
 		Idle();
 	} else {
+		uint32_t value = R(rd) + (rd == 15 ? 4 : 0);
 		if(half) {
-			Write(GbaAccessMode::HalfWord | (sign ? GbaAccessMode::Signed : 0), addr, R(rd));
+			Write(GbaAccessMode::HalfWord | (sign ? GbaAccessMode::Signed : 0), addr, value);
 		} else {
-			Write(GbaAccessMode::Byte | (sign ? GbaAccessMode::Signed : 0), addr, R(rd));
+			Write(GbaAccessMode::Byte | (sign ? GbaAccessMode::Signed : 0), addr, value);
 		}
 	}
 
@@ -365,7 +394,7 @@ void GbaCpu::ArmSignedHalfDataTransfer()
 	}
 
 	if((rd != rn || !load) && (writeBack || !pre)) {
-		SetR(rn, addr);
+		SetR(rn, addr + (rn == 15 ? 4 : 0));
 	}
 }
 
@@ -388,7 +417,7 @@ void GbaCpu::ArmBlockDataTransfer()
 	uint8_t rn = (_opCode >> 16) & 0x0F;
 	uint16_t regMask = (uint16_t)_opCode;
 
-	uint32_t base = R(rn) + (rn == 15 ? 4 : 0);
+	uint32_t base = R(rn);
 	uint32_t addr = base;
 
 	uint8_t regCount = 0;
@@ -447,10 +476,17 @@ void GbaCpu::ArmBlockDataTransfer()
 
 	SwitchMode(orgMode);
 
-	if(psrForceUser && load && (regMask & 0x8000)) {
-		GbaCpuFlags spsr = GetSpsr();
-		SwitchMode(spsr.Mode);
-		_state.CPSR = spsr;
+	if(psrForceUser && load) {
+		if(regMask & 0x8000) {
+			GbaCpuFlags spsr = GetSpsr();
+			SwitchMode(spsr.Mode);
+			_state.CPSR = spsr;
+		}
+
+		//When LDM^ is used, if registers 8-14 are accessed on the next cycle,
+		//the result is ORed with the equivalent register in the user mode registers.
+		//This is a CPU bug that requires e.g a NOP after using LDM^ to avoid the issue.
+		_ldmGlitch = 2;
 	}
 }
 
@@ -467,9 +503,10 @@ void GbaCpu::ArmSingleDataSwap()
 #ifndef DUMMYCPU
 	_memoryManager->LockBus();
 #endif
-	uint32_t val = Read(mode, R(rn));
+	uint32_t src = R(rn);
+	uint32_t val = Read(mode, src);
 	Idle();
-	Write(mode, R(rn), R(rm));
+	Write(mode, src, rm == 15 ? (R(rm) + 4) : R(rm));
 #ifndef DUMMYCPU
 	_memoryManager->UnlockBus();
 #endif
@@ -487,47 +524,6 @@ void GbaCpu::ArmInvalidOp()
 	ProcessException(GbaCpuMode::Undefined, GbaCpuVector::Undefined);
 	_emu->BreakIfDebugging(CpuType::Gba, BreakSource::GbaInvalidOpCode);
 #endif
-}
-
-bool GbaCpu::CheckConditions(uint32_t condCode)
-{
-	/*Code Suffix Flags Meaning
-		0000 EQ Z set equal
-		0001 NE Z clear not equal
-		0010 CS C set unsigned higher or same
-		0011 CC C clear unsigned lower
-		0100 MI N set negative
-		0101 PL N clear positive or zero
-		0110 VS V set overflow
-		0111 VC V clear no overflow
-		1000 HI C set and Z clear unsigned higher
-		1001 LS C clear or Z set unsigned lower or same
-		1010 GE N equals V greater or equal
-		1011 LT N not equal to V less than
-		1100 GT Z clear AND(N equals V) greater than
-		1101 LE Z set OR(N not equal to V) less than or equal
-		1110 AL(ignored) always
-	*/
-	switch(condCode) {
-		case 0: return _state.CPSR.Zero;
-		case 1: return !_state.CPSR.Zero;
-		case 2: return _state.CPSR.Carry;
-		case 3: return !_state.CPSR.Carry;
-		case 4: return _state.CPSR.Negative;
-		case 5: return !_state.CPSR.Negative;
-		case 6: return _state.CPSR.Overflow;
-		case 7: return !_state.CPSR.Overflow;
-		case 8: return _state.CPSR.Carry && !_state.CPSR.Zero;
-		case 9: return !_state.CPSR.Carry || _state.CPSR.Zero;
-		case 10: return _state.CPSR.Negative == _state.CPSR.Overflow;
-		case 11: return _state.CPSR.Negative != _state.CPSR.Overflow;
-		case 12: return !_state.CPSR.Zero && (_state.CPSR.Negative == _state.CPSR.Overflow);
-		case 13: return _state.CPSR.Zero || (_state.CPSR.Negative != _state.CPSR.Overflow);
-		case 14: return true;
-		case 15: return false;
-	}
-
-	return true;
 }
 
 void GbaCpu::InitArmOpTable()
@@ -558,8 +554,10 @@ void GbaCpu::InitArmOpTable()
 	}
 
 	//Branch and Exchange (BX)
-	//----_0001_0010_----_----_----_0001_----
-	addEntry(0x121, &GbaCpu::ArmBranchExchangeRegister, ArmOpCategory::BranchExchangeRegister);
+	//----_0001_0?10_----_----_----_0??1_----
+	for(int i = 0; i <= 0x0F; i++) {
+		addEntry(0x101 | ((i & 0x03) << 1) | ((i & 0x0C) << 3), &GbaCpu::ArmBranchExchangeRegister, ArmOpCategory::BranchExchangeRegister);
+	}
 
 	//Branch and Branch with Link (B, BL)
 	//----_101?_????_----_----_----_????_----
@@ -586,8 +584,8 @@ void GbaCpu::InitArmOpTable()
 	}
 
 	//Multiply and Multiply-Accumulate (MUL, MLA)
-	//----_0000_00??_----_----_----_1001_----
-	for(int i = 0; i <= 0x03; i++) {
+	//----_0000_0???_----_----_----_1001_----
+	for(int i = 0; i <= 0x07; i++) {
 		addEntry(0x009 | (i << 4), &GbaCpu::ArmMultiply, ArmOpCategory::Multiply);
 	}
 
@@ -598,9 +596,11 @@ void GbaCpu::InitArmOpTable()
 	}
 
 	//Single Data Swap (SWP)
-	//----_0001_0000_----_----_----_1001_----
-	addEntry(0x109, &GbaCpu::ArmSingleDataSwap, ArmOpCategory::SingleDataSwap); //word
-	addEntry(0x149, &GbaCpu::ArmSingleDataSwap, ArmOpCategory::SingleDataSwap); //byte
+	//----_0001_?0??_----_----_----_1001_----
+	for(int i = 0; i <= 0x07; i++) {
+		addEntry(0x109 | (i & 0x04) << 5 | (i & 0x03) << 4, &GbaCpu::ArmSingleDataSwap, ArmOpCategory::SingleDataSwap); //word
+		addEntry(0x149 | (i & 0x04) << 5 | (i & 0x03) << 4, &GbaCpu::ArmSingleDataSwap, ArmOpCategory::SingleDataSwap); //byte
+	}
 
 	for(int i = 0; i <= 0xFF; i++) {
 		addEntry(0xF00 + i, &GbaCpu::ArmSoftwareInterrupt, ArmOpCategory::SoftwareInterrupt);

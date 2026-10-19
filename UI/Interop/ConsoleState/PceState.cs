@@ -187,8 +187,7 @@ public struct PcePsgChannelState
 	[MarshalAs(UnmanagedType.I1)] public bool DdaEnabled;
 	public byte DdaOutputValue;
 
-	public byte WriteAddr;
-	public byte ReadAddr;
+	public byte WaveAddr;
 	public UInt32 Timer;
 	public byte CurrentOutput;
 
@@ -279,8 +278,9 @@ public enum PceCdRomIrqSource
 {
 	Adpcm = 0x04,
 	Stop = 0x08,
-	DataTransferDone = 0x20,
-	DataTransferReady = 0x40
+	SubCode = 0x10,
+	StatusMsgIn = 0x20,
+	DataIn = 0x40
 }
 
 public struct PceCdRomState
@@ -310,6 +310,7 @@ public struct PceAdpcmState
 	[MarshalAs(UnmanagedType.I1)] public bool HalfReached;
 
 	[MarshalAs(UnmanagedType.I1)] public bool Playing;
+	[MarshalAs(UnmanagedType.I1)] public bool PlayRequest;
 
 	public byte ReadBuffer;
 	public byte ReadClockCounter;
@@ -356,7 +357,8 @@ public enum ScsiPhase
 	DataOut,
 	MessageIn,
 	MessageOut,
-	Status
+	Status,
+	Busy
 }
 
 public struct PceScsiBusState

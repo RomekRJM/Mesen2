@@ -73,6 +73,11 @@ GbDebugger::~GbDebugger()
 	_codeDataLogger->SaveCdlFile(_cdlFile);
 }
 
+void GbDebugger::OnBeforeBreak(CpuType cpuType)
+{
+	_gameboy->RunApu();
+}
+
 void GbDebugger::Reset()
 {
 	_callstackManager->Clear();

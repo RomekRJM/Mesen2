@@ -110,7 +110,7 @@ LoadRomResult GbaConsole::LoadRom(VirtualFile& romFile)
 
 	_memoryManager.reset(new GbaMemoryManager(_emu, this, _ppu.get(), _dmaController.get(), _controlManager.get(), _timer.get(), _apu.get(), _cart.get(), _serial.get(), _prefetch.get()));
 
-	_prefetch->Init(_memoryManager.get(), _cpu.get());
+	_prefetch->Init(_memoryManager->GetWaitStates(), this);
 	_cart->Init(_emu, this, _memoryManager.get(), _saveType, _rtcType, _cartType);
 	_ppu->Init(_emu, this, _memoryManager.get());
 	_apu->Init(_emu, this, _dmaController.get(), _memoryManager.get());
@@ -274,6 +274,7 @@ GbaState GbaConsole::GetState()
 	state.Timer = _timer->GetState();
 	state.Prefetch = _prefetch->GetState();
 	state.ControlManager = _controlManager->GetState();
+	state.Cart = _cart->GetState();
 	return state;
 }
 
@@ -300,6 +301,11 @@ GbaCpu* GbaConsole::GetCpu()
 GbaPpu* GbaConsole::GetPpu()
 {
 	return _ppu.get();
+}
+
+GbaApu* GbaConsole::GetApu()
+{
+	return _apu.get();
 }
 
 GbaDmaController* GbaConsole::GetDmaController()
@@ -441,6 +447,21 @@ AudioTrackInfo GbaConsole::GetAudioTrackInfo()
 void GbaConsole::ProcessAudioPlayerAction(AudioPlayerActionParams p)
 {
 	//TODOGBA
+}
+
+void GbaConsole::ClearCpuSequentialFlag()
+{
+	_cpu->ClearSequentialFlag();
+}
+
+void GbaConsole::SetCpuSequentialFlag()
+{
+	_cpu->SetSequentialFlag();
+}
+
+void GbaConsole::SetCpuStopFlag()
+{
+	_cpu->SetStopFlag(true);
 }
 
 ConsoleRegion GbaConsole::GetRegion()

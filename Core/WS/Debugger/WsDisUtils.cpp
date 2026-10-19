@@ -178,9 +178,9 @@ void WsDisUtils::GetDisassembly(DisassemblyInfo& info, string& out, uint32_t mem
 			}
 
 			//Relative jumps
-			case 'r': GetJmpDestination(str, byteCode, 1); break;
-			case 's': GetJmpDestination(str, byteCode, 2); break;
-			case 't': GetJmpDestination(str, byteCode, 4); break;
+			case 'r': GetJmpDestination(str, byteCode+1, 1); break;
+			case 's': GetJmpDestination(str, byteCode+1, 2); break;
+			case 't': GetJmpDestination(str, byteCode+1, 4); break;
 
 			case 'v': //GRP1
 				switch((byteCode[1] >> 3) & 0x07) {
@@ -248,8 +248,9 @@ void WsDisUtils::GetDisassembly(DisassemblyInfo& info, string& out, uint32_t mem
 			}
 
 			case 'y': //grp 4
-			case 'z': //grp 5
-				switch((byteCode[1] >> 3) & 0x07) {
+			case 'z': { //grp 5
+				uint8_t type = (byteCode[1] >> 3) & 0x07;
+				switch(type) {
 					case 0: str.Write("INC "); break;
 					case 1: str.Write("DEC "); break;
 					case 2: str.Write("CALL "); break;
@@ -259,8 +260,9 @@ void WsDisUtils::GetDisassembly(DisassemblyInfo& info, string& out, uint32_t mem
 					case 6: str.Write("PUSH "); break;
 					case 7: str.Write("UNDEFINED_GRP5_7 "); break;
 				}
-				GetModRmParam(str, byteCode, segment, opCode & 0x01);
+				GetModRmParam(str, byteCode, segment, opCode & 0x01, type == 3 || type == 5);
 				break;
+			}
 
 			default: str.Write(op[i]); break;
 		}
@@ -273,14 +275,22 @@ void WsDisUtils::GetDisassembly(DisassemblyInfo& info, string& out, uint32_t mem
 void WsDisUtils::GetJmpDestination(FastString& str, uint8_t* byteCode, uint8_t size)
 {
 	if(size == 4) {
-		str.WriteAll("$", HexUtilities::ToHex((uint16_t)(byteCode[3] | (byteCode[4] << 8))));
-		str.WriteAll(":$", HexUtilities::ToHex((uint16_t)(byteCode[1] | (byteCode[2] << 8))));
+		str.WriteAll("$", HexUtilities::ToHex((uint16_t)(byteCode[2] | (byteCode[3] << 8))));
+		str.WriteAll(":$", HexUtilities::ToHex((uint16_t)(byteCode[0] | (byteCode[1] << 8))));
 	} else if(size == 2) {
-		uint16_t jmpOffset = (uint16_t)(byteCode[1] | (byteCode[2] << 8));
-		str.WriteAll("+$", HexUtilities::ToHex(jmpOffset));
+		int16_t jmpOffset = (int16_t)(byteCode[0] | (byteCode[1] << 8));
+		if(jmpOffset < 0) {
+			str.WriteAll("-$", HexUtilities::ToHex((uint16_t)-jmpOffset));
+		} else {
+			str.WriteAll("+$", HexUtilities::ToHex((uint16_t)jmpOffset));
+		}
 	} else if(size == 1) {
-		uint8_t jmpOffset = (uint8_t)byteCode[1];
-		str.WriteAll("+$", HexUtilities::ToHex(jmpOffset));
+		int8_t jmpOffset = (int8_t)byteCode[0];
+		if(jmpOffset < 0) {
+			str.WriteAll("-$", HexUtilities::ToHex((uint8_t)-jmpOffset));
+		} else {
+			str.WriteAll("+$", HexUtilities::ToHex((uint8_t)jmpOffset));
+		}
 	}
 }
 
@@ -351,10 +361,12 @@ int WsDisUtils::GetModRmParam(FastString& str, uint8_t* byteCode, WsSegment segm
 		}
 
 		if(mode == 1) {
-			str.WriteAll("+$", HexUtilities::ToHex((uint8_t)byteCode[2]), ']');
+			GetJmpDestination(str, byteCode + 2, 1);
+			str.Write(']');
 			len++;
 		} else if(mode == 2) {
-			str.WriteAll("+$", HexUtilities::ToHex((uint16_t)(byteCode[2] | (byteCode[3] << 8))), ']');
+			GetJmpDestination(str, byteCode + 2, 2);
+			str.Write(']');
 			len += 2;
 		} else {
 			str.Write(']');
@@ -366,7 +378,7 @@ int WsDisUtils::GetModRmParam(FastString& str, uint8_t* byteCode, WsSegment segm
 
 EffectiveAddressInfo WsDisUtils::GetEffectiveAddress(DisassemblyInfo& info, WsConsole* console, WsCpuState& state)
 {
-	DummyWsCpu dummyCpu(nullptr, console->GetMemoryManager());
+	DummyWsCpu dummyCpu(nullptr, console, console->GetMemoryManager());
 	dummyCpu.SetDummyState(state);
 	dummyCpu.Exec();
 
@@ -403,6 +415,7 @@ EffectiveAddressInfo WsDisUtils::GetEffectiveAddress(DisassemblyInfo& info, WsCo
 				if(dummyCpu.IsWordAccess(i - 1) && prevOpInfo.Type == opInfo.Type && prevOpInfo.Address == opInfo.Address - 2) {
 					result.Address = prevOpInfo.Address;
 					result.Type = prevOpInfo.MemType;
+					result.ValueSize = 4;
 				} else {
 					result.Address = opInfo.Address;
 					result.Type = opInfo.MemType;
@@ -440,7 +453,7 @@ int WsDisUtils::GetModRmSize(uint8_t modRm)
 
 bool WsDisUtils::IsPrefix(uint8_t opCode)
 {
-	return opCode == 0xF0 || opCode == 0xF2 || opCode == 0xF3 || opCode == 0x26 || opCode == 0x36 || opCode == 0x2E || opCode == 0x3F;
+	return opCode == 0xF0 || opCode == 0xF2 || opCode == 0xF3 || opCode == 0x26 || opCode == 0x36 || opCode == 0x2E || opCode == 0x3E;
 }
 
 uint8_t WsDisUtils::GetOpSize(uint32_t cpuAddress, MemoryType memType, MemoryDumper* memoryDumper)

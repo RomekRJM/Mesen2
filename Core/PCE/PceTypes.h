@@ -210,8 +210,7 @@ struct PcePsgChannelState
 	bool DdaEnabled;
 	uint8_t DdaOutputValue;
 
-	uint8_t WriteAddr;
-	uint8_t ReadAddr;
+	uint8_t WaveAddr;
 	uint32_t Timer;
 	int8_t CurrentOutput;
 
@@ -300,8 +299,9 @@ enum class PceCdRomIrqSource
 {
 	Adpcm = 0x04,
 	Stop = 0x08,
-	DataTransferDone = 0x20,
-	DataTransferReady = 0x40
+	SubCode = 0x10,
+	StatusMsgIn = 0x20,
+	DataIn = 0x40
 };
 
 struct PceCdRomState
@@ -331,6 +331,7 @@ struct PceAdpcmState
 	bool HalfReached;
 
 	bool Playing;
+	bool PlayRequest;
 
 	uint8_t ReadBuffer;
 	uint8_t ReadClockCounter;
@@ -377,7 +378,8 @@ enum class ScsiPhase
 	DataOut, //unused
 	MessageIn,
 	MessageOut, //unused
-	Status
+	Status,
+	Busy,
 };
 
 struct PceScsiBusState
